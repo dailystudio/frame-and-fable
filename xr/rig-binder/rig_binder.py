@@ -460,10 +460,12 @@ bpy.ops.file.unpack_all(method='WRITE_LOCAL')
 if os.path.exists(temp_blend):
     os.remove(temp_blend)
 
-# 1. Animation Setup: Retain animation slot on armature, clear active action & NLA tracks, and reset transforms to rest pose (T-pose)
+# 1. Animation Setup: Set action name, clear active action & NLA tracks, and reset transforms to rest pose (T-pose)
 for obj in bpy.data.objects:
     if obj.type == 'ARMATURE':
         if obj.animation_data:
+            if obj.animation_data.action:
+                obj.animation_data.action.name = "Action_SkeletonAnimation"
             obj.animation_data.action = None
             for track in list(obj.animation_data.nla_tracks):
                 obj.animation_data.nla_tracks.remove(track)
@@ -540,10 +542,14 @@ def step6_export_anim_usdc(blender_bin, anim_fbx_path, output_dir, model_name, a
     """
     Step 6: Export Animation Data Only to {xxx}_anim_{yyy}.usdc.
     - USD Export Settings: Include Mesh (skeleton topology), Animation, Armatures; Exclude Geometry (normals/uvmaps/colors), Materials, Lights, Cameras
-    - SkelAnimation track name set to Mixamo animation title (anim_raw_name)
+    - SkelAnimation track name set to Mixamo animation title with _SkeletonAnimation suffix
+    - Timeline frame_start and frame_end adjusted to match action frame range
     """
     os.makedirs(output_dir, exist_ok=True)
     out_usdc = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.usdc")
+
+    usd_prim_name = re.sub(r"[\s\-\W]+", "_", anim_raw_name).strip("_")
+    action_skel_name = f"{usd_prim_name}_SkeletonAnimation"
 
     script = """
 import bpy
@@ -552,15 +558,19 @@ import os
 
 fbx_input = sys.argv[-3]
 usdc_out = sys.argv[-2]
-anim_track_name = sys.argv[-1]
+action_name = sys.argv[-1]
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.fbx(filepath=fbx_input)
 
-# Set action name to match Mixamo animation title
+# Set action name to match Mixamo animation title with _SkeletonAnimation suffix, and set scene frame range
 for obj in bpy.data.objects:
     if obj.type == 'ARMATURE' and obj.animation_data and obj.animation_data.action:
-        obj.animation_data.action.name = anim_track_name
+        act = obj.animation_data.action
+        act.name = action_name
+        if hasattr(act, 'frame_range'):
+            bpy.context.scene.frame_start = int(act.frame_range[0])
+            bpy.context.scene.frame_end = int(act.frame_range[1])
 
 # USD Export Settings: Include Mesh, Animation, Armatures; Exclude Geometry attributes, Materials, Lights, Cameras
 bpy.ops.wm.usd_export(
@@ -577,14 +587,48 @@ bpy.ops.wm.usd_export(
 )
 print(f"Step 6 completed: Exported USDC animation data to {usdc_out}")
 """
-    print(f"Executing Step 6: Exporting animation USDC to {out_usdc} with animation track '{anim_raw_name}'...")
-    run_blender_script(blender_bin, script, [anim_fbx_path, out_usdc, anim_raw_name])
+    print(f"Executing Step 6: Exporting animation USDC to {out_usdc} with animation track '{action_skel_name}'...")
+    run_blender_script(blender_bin, script, [anim_fbx_path, out_usdc, action_skel_name])
 
     print(f"Step 6 finished. USDC created at: {out_usdc}")
     return out_usdc
 
 
-def step7_import_to_spatial_editor(se_project_dir, scene_name, model_name, anim_slug, anim_raw_name, base_usdz_path, anim_usdc_path):
+def get_skel_anim_path(blender_bin, usdc_path, fallback_name="Action"):
+    """Inspect USDC or USDZ file using Blender USD API to get the exact SkelAnimation prim path."""
+    clean_fallback = re.sub(r"[\s\-\W]+", "_", fallback_name).strip("_")
+    if not usdc_path or not os.path.exists(usdc_path) or not blender_bin:
+        return f"/root/Armature/Armature/{clean_fallback}_SkeletonAnimation"
+
+    script = """
+import sys
+from pxr import Usd, UsdSkel
+
+usdc_file = sys.argv[-1]
+stage = Usd.Stage.Open(usdc_file)
+found = False
+for prim in stage.Traverse():
+    if prim.IsA(UsdSkel.Animation) or prim.GetTypeName() == 'SkelAnimation':
+        print(f"SKEL_ANIM_PATH:{prim.GetPath()}")
+        found = True
+        break
+if not found:
+    print("SKEL_ANIM_PATH:NONE")
+"""
+    try:
+        out = run_blender_script(blender_bin, script, [usdc_path])
+        for line in out.splitlines():
+            if line.startswith("SKEL_ANIM_PATH:"):
+                p = line.split("SKEL_ANIM_PATH:")[1].strip()
+                if p and p != "NONE":
+                    return p
+    except Exception:
+        pass
+
+    return f"/root/Armature/Armature/{clean_fallback}_SkeletonAnimation"
+
+
+def step7_import_to_spatial_editor(se_project_dir, scene_name, model_name, anim_slug, anim_raw_name, base_usdz_path, anim_usdc_path, blender_bin=None):
     """
     Step 7: Import base mesh USDZ and animation USDC into Spatial Editor project.
     - Base model saved as Sources/Assets/{xxx}_without_anim.usdz
@@ -623,7 +667,7 @@ def step7_import_to_spatial_editor(se_project_dir, scene_name, model_name, anim_
                     custom string[] clipNames = []
                     custom uniform asset file = @../Assets/anims/{anim_slug}.usdc@
                     custom bool isDefault = 0
-                    custom string path = "/root/Armature/Armature/{usd_prim_name}_SkeletonAnimation"
+                    custom string path = "/root/Armature/Armature/{usd_prim_name}_SkeletonAnimation_SkeletonAnimation"
                 }}"""
 
     if not os.path.exists(scene_file):
@@ -660,7 +704,7 @@ def Xform "Root"
                 {{
                     custom string[] clipNames = []
                     custom bool isDefault = 1
-                    custom string path = "/{model_name}_without_anim/Armature/Armature/Action_SkeletonAnimation"
+                    custom string path = "/Root/{model_name}/Armature/Armature/Action_SkeletonAnimation"
                 }}
 
 {anim_struct_code}
@@ -698,7 +742,7 @@ def Xform "Root"
                 {{
                     custom string[] clipNames = []
                     custom bool isDefault = 1
-                    custom string path = "/{model_name}_without_anim/Armature/Armature/Action_SkeletonAnimation"
+                    custom string path = "/Root/{model_name}/Armature/Armature/Action_SkeletonAnimation"
                 }}
 
 {anim_struct_code}
@@ -713,8 +757,8 @@ def Xform "Root"
         else:
             struct_str = f'def SpatialStruct "{anim_slug}"'
             if struct_str in content:
-                pattern = rf'(def SpatialStruct "{anim_slug}"[\s\S]*?custom uniform asset file = )@.*?@'
-                new_content = re.sub(pattern, rf'\1@../Assets/anims/{anim_slug}.usdc@', content)
+                pattern = rf'def SpatialStruct "{anim_slug}"[\s\S]*?\n\s*\}}'
+                new_content = re.sub(pattern, anim_struct_code.strip(), content)
                 with open(scene_file, "w") as f:
                     f.write(new_content)
                 print(f"Step 7 finished: Updated animation struct in existing scene USDA at {scene_file}")
@@ -739,18 +783,24 @@ def Xform "Root"
                         print(f"Step 7 finished: Inserted animation struct into scene USDA at {scene_file}")
 
 
-def parse_anim_info_from_fbx(anim_fbx_path, model_name):
-    """Extract anim_slug and anim_raw_name from FBX filename or path."""
+def parse_anim_info_from_fbx(anim_fbx_path, model_name=None):
+    """
+    Extract model_name, anim_slug, and anim_raw_name from FBX filename or path.
+    Uses '_anim_' as separator if present in the filename.
+    """
     base_stem = os.path.splitext(os.path.basename(anim_fbx_path))[0]
-    pattern = f"^{re.escape(model_name)}_anim_(.+)$"
-    match = re.match(pattern, base_stem, re.IGNORECASE)
+    match = re.match(r"^(.*?)_anim_(.+)$", base_stem, re.IGNORECASE)
     if match:
-        anim_slug = match.group(1).lower()
-        anim_raw_name = anim_slug.replace("_", " ").title()
-    else:
-        anim_slug = to_snake_case(base_stem)
-        anim_raw_name = base_stem.replace("_", " ").strip()
-    return anim_slug, anim_raw_name
+        extracted_model_name = to_snake_case(match.group(1))
+        anim_slug = to_snake_case(match.group(2))
+        anim_raw_name = anim_slug.replace("_", " ").strip().title()
+        final_model_name = model_name if model_name and model_name not in ["model", "character"] else extracted_model_name
+        return final_model_name, anim_slug, anim_raw_name
+
+    anim_slug = to_snake_case(base_stem)
+    anim_raw_name = anim_slug.replace("_", " ").strip().title()
+    final_model_name = model_name if model_name else anim_slug
+    return final_model_name, anim_slug, anim_raw_name
 
 
 def check_existing_anim_fbx(output_dir, model_name, custom_anim_fbx=None):
@@ -781,8 +831,6 @@ def main():
     )
     parser.add_argument(
         "--input-anim",
-        "--anim-fbx",
-        dest="input_anim",
         type=str,
         default=None,
         help="Path to Mixamo animated FBX file (skips Steps 1-4, runs Steps 5-6)",
@@ -819,13 +867,6 @@ def main():
         help="Path to Blender binary (optional)",
     )
     parser.add_argument(
-        "--step",
-        type=str,
-        choices=["all", "prep", "mixamo", "base", "anim", "se"],
-        default="all",
-        help="Specific pipeline phase to execute: 'prep', 'mixamo', 'base', 'anim', 'se', or 'all'",
-    )
-    parser.add_argument(
         "--auto-browser",
         action="store_true",
         default=True,
@@ -837,6 +878,7 @@ def main():
         dest="auto_browser",
         help="Disable automatic headful browser for Step 4",
     )
+
     args = parser.parse_args()
 
     blender_bin = find_blender_binary(args.blender_path)
@@ -845,23 +887,38 @@ def main():
     out_dir = os.path.abspath(args.output)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Determine execution mode and model name
-    usdz_path = None
-    input_anim_path = None
-    use_mixamo_session = False
-
+    # Workflow 1: --input-anim (Process provided Mixamo animation FBX directly: Steps 5-6)
     if args.input_anim:
-        input_anim_path = os.path.abspath(args.input_anim)
-        if not os.path.exists(input_anim_path):
+        anim_fbx_path = os.path.abspath(args.input_anim)
+        if not os.path.exists(anim_fbx_path):
             sys.exit(f"Error: Animated FBX file '{args.input_anim}' not found.")
-        if args.input:
-            model_name = to_snake_case(args.input)
-        else:
-            model_name = parse_anim_info_from_fbx(input_anim_path, "model")[0]
-            if model_name == "model":
-                model_name = to_snake_case(input_anim_path)
-    elif args.input_mixamo:
-        use_mixamo_session = True
+
+        given_model = to_snake_case(args.input) if args.input else None
+        model_name, anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, given_model)
+
+        print(f"Pipeline target model name: '{model_name}'")
+        print(f"\nProcessing provided Mixamo animation FBX: {anim_fbx_path}")
+        print(f"Detected animation slug: '{anim_slug}', title: '{anim_raw_name}'")
+
+        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
+        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
+
+        if args.import_to_se:
+            step7_import_to_spatial_editor(
+                se_project_dir=args.import_to_se,
+                scene_name=args.scene,
+                model_name=model_name,
+                anim_slug=anim_slug,
+                anim_raw_name=anim_raw_name,
+                base_usdz_path=base_usdz_path,
+                anim_usdc_path=anim_usdc_path,
+                blender_bin=blender_bin,
+            )
+        print("\nPipeline execution finished successfully!")
+        return
+
+    # Workflow 2: --input-mixamo (Reuse uploaded Mixamo character session: Steps 4-6)
+    if args.input_mixamo:
         if args.input:
             model_name = to_snake_case(args.input)
         elif isinstance(args.input_mixamo, str):
@@ -869,51 +926,11 @@ def main():
         else:
             candidates = check_existing_anim_fbx(out_dir, "model", None)
             if candidates:
-                model_name = parse_anim_info_from_fbx(candidates[0], "model")[0]
+                model_name = parse_anim_info_from_fbx(candidates[0])[0]
             else:
                 model_name = "character"
-    elif args.input:
-        usdz_path = os.path.abspath(args.input)
-        if not os.path.exists(usdz_path) and args.step in ["all", "prep"]:
-            sys.exit(f"Error: Input USDZ file '{args.input}' not found.")
-        model_name = to_snake_case(usdz_path)
-    elif args.step != "all":
-        model_name = "model"
-    else:
-        sys.exit(
-            "Error: Please specify an input flag:\n"
-            "  --input <usdz_file>     : Convert USDZ, upload to Mixamo, and export USD/SE assets (Steps 1-6)\n"
-            "  --input-anim <fbx_file> : Process existing Mixamo FBX and export USD/SE assets (Steps 5-6)\n"
-            "  --input-mixamo          : Select new action for already-uploaded Mixamo character (Steps 4-6)"
-        )
 
-    print(f"Pipeline target model name (xxx): '{model_name}'")
-
-    # Mode 1: --input-anim (Process provided Mixamo animation FBX directly: Steps 5-6)
-    if input_anim_path and args.step in ["all", "base", "anim"]:
-        anim_fbx_path = input_anim_path
-        anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, model_name)
-        print(f"\nProcessing provided Mixamo animation FBX: {anim_fbx_path}")
-        print(f"Detected animation slug: '{anim_slug}', title: '{anim_raw_name}'")
-
-        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
-        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
-
-        if args.import_to_se or args.step == "se":
-            step7_import_to_spatial_editor(
-                se_project_dir=args.import_to_se if args.import_to_se else out_dir,
-                scene_name=args.scene,
-                model_name=model_name,
-                anim_slug=anim_slug,
-                anim_raw_name=anim_raw_name,
-                base_usdz_path=base_usdz_path,
-                anim_usdc_path=anim_usdc_path,
-            )
-        print("\nPipeline execution finished successfully!")
-        return
-
-    # Mode 2: --input-mixamo (Reuse uploaded Mixamo character session: Steps 4-6)
-    if use_mixamo_session and args.step in ["all", "mixamo", "base", "anim"]:
+        print(f"Pipeline target model name: '{model_name}'")
         anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(
             zip_path=None, output_dir=out_dir, model_name=model_name, skip_upload=True
         )
@@ -923,72 +940,62 @@ def main():
         base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
         anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
 
-        if args.import_to_se or args.step == "se":
+        if args.import_to_se:
             step7_import_to_spatial_editor(
-                se_project_dir=args.import_to_se if args.import_to_se else out_dir,
+                se_project_dir=args.import_to_se,
                 scene_name=args.scene,
                 model_name=model_name,
                 anim_slug=anim_slug,
                 anim_raw_name=anim_raw_name,
                 base_usdz_path=base_usdz_path,
                 anim_usdc_path=anim_usdc_path,
+                blender_bin=blender_bin,
             )
         print("\nPipeline execution finished successfully!")
         return
 
-    # Mode 3: --input (Full USDZ -> Mixamo -> USD -> SE pipeline: Steps 1-6)
-    zip_path = os.path.join(out_dir, f"{model_name}_upload_to_mixamo.zip")
+    # Workflow 3: --input (Full USDZ -> Mixamo -> USD -> SE pipeline: Steps 1-6)
+    if args.input:
+        usdz_path = os.path.abspath(args.input)
+        if not os.path.exists(usdz_path):
+            sys.exit(f"Error: Input USDZ file '{args.input}' not found.")
 
-    # Steps 1-3: USDZ conversion & zip package
-    if args.step in ["all", "prep"]:
+        model_name = to_snake_case(usdz_path)
+        print(f"Pipeline target model name: '{model_name}'")
+
         step2_folder, fbx_out = step2_convert_usdz_to_fbx(blender_bin, usdz_path, out_dir, model_name)
         zip_path = step3_package_for_mixamo(step2_folder, fbx_out, out_dir, model_name)
 
-    base_usdz_path = os.path.join(out_dir, f"{model_name}_anim_base.usdz")
-    anim_usdc_path = None
-    anim_slug = None
-    anim_raw_name = None
-
-    if args.step in ["all", "mixamo", "base", "anim", "se"]:
         anim_fbx_path = None
-        if args.auto_browser and os.path.exists(zip_path) and args.step != "se":
+        if args.auto_browser and os.path.exists(zip_path):
             anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(zip_path, out_dir, model_name)
 
-        if not anim_fbx_path and args.step not in ["prep", "se"]:
-            print("\n" + "=" * 60)
-            print("Notice: Step 4 (Mixamo Auto-Rigging & Animation) is manual.")
-            print(f"Please upload '{model_name}_upload_to_mixamo.zip' to https://www.mixamo.com/")
-            print(f"Download the animated FBX and save it as '{model_name}_anim_<animation_name>.fbx'.")
-            print("Then re-run this script to execute Steps 5 and 6.")
-            print("=" * 60)
-            return
+        if not anim_fbx_path:
+            sys.exit("Error: Failed to capture Mixamo animation download.")
 
-        if anim_fbx_path:
-            print(f"Using Mixamo animation FBX: {anim_fbx_path}")
-            print(f"Detected animation slug (yyy): '{anim_slug}', raw title: '{anim_raw_name}'")
+        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
+        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
 
-            if args.step in ["all", "base"]:
-                base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
+        if args.import_to_se:
+            step7_import_to_spatial_editor(
+                se_project_dir=args.import_to_se,
+                scene_name=args.scene,
+                model_name=model_name,
+                anim_slug=anim_slug,
+                anim_raw_name=anim_raw_name,
+                base_usdz_path=base_usdz_path,
+                anim_usdc_path=anim_usdc_path,
+                blender_bin=blender_bin,
+            )
+        print("\nPipeline execution finished successfully!")
+        return
 
-            if args.step in ["all", "anim"]:
-                anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
-            else:
-                anim_usdc_path = os.path.join(out_dir, f"{model_name}_anim_{anim_slug}.usdc")
-
-    # Step 7: Import to Spatial Editor project if requested
-    if args.import_to_se or args.step == "se":
-        se_target_dir = args.import_to_se if args.import_to_se else out_dir
-        step7_import_to_spatial_editor(
-            se_project_dir=se_target_dir,
-            scene_name=args.scene,
-            model_name=model_name,
-            anim_slug=anim_slug or "animation",
-            anim_raw_name=anim_raw_name or "Animation",
-            base_usdz_path=base_usdz_path,
-            anim_usdc_path=anim_usdc_path,
-        )
-
-    print("\nPipeline execution finished successfully!")
+    sys.exit(
+        "Error: Please specify one of the input flags:\n"
+        "  --input <usdz_file>     : Convert USDZ, upload to Mixamo, and export USD/SE assets\n"
+        "  --input-anim <fbx_file> : Process existing Mixamo FBX and export USD/SE assets\n"
+        "  --input-mixamo          : Select new action for already-uploaded Mixamo character"
+    )
 
 
 if __name__ == "__main__":

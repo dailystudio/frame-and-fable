@@ -96,7 +96,7 @@ Let **`xxx`** be the `snake_case` name of the input USDZ model (e.g. `mrye`), an
 options:
   -h, --help            show this help message and exit
   --input INPUT         Path to input USDZ file (runs full pipeline: Steps 1-6)
-  --input-anim INPUT_ANIM, --anim-fbx INPUT_ANIM
+  --input-anim INPUT_ANIM
                         Path to Mixamo animated FBX file (skips Steps 1-4, runs Steps 5-6)
   --input-mixamo [INPUT_MIXAMO]
                         Reuse existing Mixamo.com character session to select a new animation action (skips Steps 1-3, runs Steps 4-6)
@@ -106,8 +106,6 @@ options:
   --scene SCENE         Scene name for Spatial Editor import (converted to PascalCase, default: Default)
   --blender-path BLENDER_PATH
                         Path to Blender executable binary (optional)
-  --step {all,prep,mixamo,base,anim,se}
-                        Specific pipeline phase to execute: 'prep', 'mixamo', 'base', 'anim', 'se', or 'all'
   --auto-browser        Automatically open headful browser for Mixamo in Step 4 (default: True)
   --no-auto-browser     Disable automatic headful browser for Step 4
 ```
