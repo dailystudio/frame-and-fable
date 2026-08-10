@@ -390,7 +390,7 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
                             if os.path.isfile(full_artifact_path) and os.path.getmtime(full_artifact_path) >= start_time - 30:
                                 if not any(file_name.lower().endswith(ext) for ext in [".crdownload", ".tmp", ".part", ".download"]):
                                     if os.path.getsize(full_artifact_path) > 100000 and wait_for_file_completion(full_artifact_path, min_size=50000, stability_sec=1):
-                                        raw_title = get_mixamo_animation_title(page)
+                                        raw_title = detected_anim_raw[0] if detected_anim_raw[0] and detected_anim_raw[0] != "animation" else get_mixamo_animation_title(page)
                                         anim_slug = to_snake_case(raw_title)
                                         target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
                                         print(f"\n📥 [DOWNLOAD DETECTED IN PLAYWRIGHT ARTIFACTS] File: {file_name} (Animation: '{raw_title}')")
@@ -413,7 +413,7 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
                     if f.lower().endswith(".fbx") and ("_anim_" in f or "4_model_anim" in f):
                         cand_path = os.path.join(output_dir, f)
                         if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 50000 and os.path.getmtime(cand_path) >= start_time - 30:
-                            anim_slug, anim_raw_name = parse_anim_info_from_fbx(cand_path, model_name)
+                            cand_model, anim_slug, anim_raw_name = parse_anim_info_from_fbx(cand_path, model_name)
                             print(f"\n📥 [ANIMATED FBX DETECTED IN OUTPUT DIR] File: {f}")
                             detected_fbx_path[0] = cand_path
                             detected_anim_raw[0] = anim_raw_name
