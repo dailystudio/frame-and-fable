@@ -171,10 +171,11 @@ def step3_package_for_mixamo(step2_folder, fbx_path, output_dir, model_name):
     return zip_path
 
 
-def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name):
+def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, skip_upload=False):
     """
-    Step 4: Launch a headful browser, navigate to Mixamo, auto-upload {xxx}_upload_to_mixamo.zip,
-    wait for user interactive auto-rigging & animation download, and save to {xxx}_anim_{yyy}.fbx.
+    Step 4: Launch a headful browser, navigate to Mixamo, auto-upload {xxx}_upload_to_mixamo.zip
+    (or reuse existing uploaded session if skip_upload=True), wait for user animation download,
+    and save to {xxx}_anim_{yyy}.fbx.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -182,13 +183,17 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name):
         print("Playwright is not installed. Please install with: pip install playwright && playwright install chromium")
         return None, None, None
 
-    zip_path_abs = os.path.abspath(zip_path)
+    zip_path_abs = os.path.abspath(zip_path) if zip_path else None
 
     print("\n" + "=" * 70)
     print("Launching interactive browser for Mixamo (Step 4)...")
-    print("The browser will open https://www.mixamo.com/ and auto-upload your zip file.")
-    print("Please complete sign-in (if required), adjust rigging markers, pick an animation,")
-    print("and click DOWNLOAD in Mixamo.")
+    if skip_upload:
+        print("Reusing existing uploaded Mixamo character session.")
+        print("Please pick your desired animation action and click DOWNLOAD in Mixamo.")
+    else:
+        print("The browser will open https://www.mixamo.com/ and auto-upload your zip file.")
+        print("Please complete sign-in (if required), adjust rigging markers, pick an animation,")
+        print("and click DOWNLOAD in Mixamo.")
     print("=" * 70 + "\n")
 
     user_data_dir = os.path.expanduser("~/.mixamo_browser_profile")
@@ -307,7 +312,7 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name):
         print("Navigating to https://www.mixamo.com/...")
         page.goto("https://www.mixamo.com/", wait_until="domcontentloaded")
 
-        uploaded = False
+        uploaded = skip_upload
         print("Waiting for Mixamo interface to load...")
 
         downloads_dir = os.path.expanduser("~/Downloads")
@@ -315,15 +320,20 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name):
 
         start_time = time.time()
         print("\n" + "-" * 70)
-        print("⌛ Step 4 Active: Please interact with Mixamo in the open browser window:")
-        print("   1. Adjust rigging markers (chin, wrists, elbows, knees, groin)")
-        print("   2. Click NEXT to complete auto-rigging")
-        print("   3. Pick your desired animation")
-        print("   4. Click the red DOWNLOAD button on Mixamo")
+        if skip_upload:
+            print("⌛ Step 4 Active: Reusing currently uploaded Mixamo character session!")
+            print("   1. Pick your desired animation action in Mixamo")
+            print("   2. Click the red DOWNLOAD button on Mixamo")
+        else:
+            print("⌛ Step 4 Active: Please interact with Mixamo in the open browser window:")
+            print("   1. Adjust rigging markers (chin, wrists, elbows, knees, groin)")
+            print("   2. Click NEXT to complete auto-rigging")
+            print("   3. Pick your desired animation")
+            print("   4. Click the red DOWNLOAD button on Mixamo")
         print("-" * 70 + "\n")
 
         while not anim_downloaded[0] and (time.time() - start_time < 600):
-            if not uploaded:
+            if not uploaded and zip_path_abs:
                 try:
                     file_input = page.query_selector("input[type='file']")
                     if file_input:
@@ -343,7 +353,10 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name):
             # Print periodic status hint every 10 seconds
             elapsed = int(time.time() - start_time)
             if elapsed > 0 and elapsed % 10 == 0:
-                print(f"⌛ [{elapsed}s] Waiting in Mixamo: Adjust rigging markers -> Click Next -> Pick animation -> Click DOWNLOAD")
+                if skip_upload:
+                    print(f"⌛ [{elapsed}s] Waiting in Mixamo: Pick animation -> Click DOWNLOAD")
+                else:
+                    print(f"⌛ [{elapsed}s] Waiting in Mixamo: Adjust rigging markers -> Click Next -> Pick animation -> Click DOWNLOAD")
 
             # 1. Check ~/Downloads for any newly downloaded / recently modified FBX or UUID download file
             if os.path.exists(downloads_dir):
@@ -761,22 +774,43 @@ def main():
         description="Rig Binder (rig-binder): USDZ to Mixamo & Spatial Editor Pipeline"
     )
     parser.add_argument(
-        "--input-usdz",
-        type=str,
-        default="1_model_orig.usdz",
-        help="Path to input USDZ file (default: 1_model_orig.usdz)",
-    )
-    parser.add_argument(
-        "--anim-fbx",
+        "--input",
         type=str,
         default=None,
-        help="Path to animated FBX from Mixamo (default: auto-detected in output directory)",
+        help="Path to input USDZ file (runs full pipeline: Steps 1-6)",
     )
     parser.add_argument(
-        "--output-dir",
+        "--input-anim",
+        "--anim-fbx",
+        dest="input_anim",
         type=str,
-        default=".",
-        help="Output directory for generated pipeline artifacts (default: current directory)",
+        default=None,
+        help="Path to Mixamo animated FBX file (skips Steps 1-4, runs Steps 5-6)",
+    )
+    parser.add_argument(
+        "--input-mixamo",
+        nargs="?",
+        const=True,
+        default=False,
+        help="Reuse existing Mixamo.com character session to select a new animation action (skips Steps 1-3, runs Steps 4-6)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="outputs",
+        help="Output directory for generated pipeline artifacts (default: outputs/)",
+    )
+    parser.add_argument(
+        "--import-to-se",
+        type=str,
+        default=None,
+        help="Target Spatial Editor project path (runs Step 7)",
+    )
+    parser.add_argument(
+        "--scene",
+        type=str,
+        default="Default",
+        help="Scene name for Spatial Editor import (converted to PascalCase, default: Default)",
     )
     parser.add_argument(
         "--blender-path",
@@ -789,13 +823,13 @@ def main():
         type=str,
         choices=["all", "prep", "mixamo", "base", "anim", "se"],
         default="all",
-        help="Pipeline phase to execute: 'prep' (Steps 1-3), 'mixamo' (Step 4), 'base' (Step 5), 'anim' (Step 6), 'se' (Step 7), or 'all'",
+        help="Specific pipeline phase to execute: 'prep', 'mixamo', 'base', 'anim', 'se', or 'all'",
     )
     parser.add_argument(
         "--auto-browser",
         action="store_true",
         default=True,
-        help="Automatically open headful browser for Mixamo upload/download in Step 4 (default: True)",
+        help="Automatically open headful browser for Mixamo in Step 4 (default: True)",
     )
     parser.add_argument(
         "--no-auto-browser",
@@ -803,113 +837,122 @@ def main():
         dest="auto_browser",
         help="Disable automatic headful browser for Step 4",
     )
-    parser.add_argument(
-        "--import-to-se",
-        type=str,
-        default=None,
-        help="Target Spatial Editor project path (e.g. ~/Editor/maple)",
-    )
-    parser.add_argument(
-        "--scene",
-        type=str,
-        default="Default",
-        help="Scene name for Spatial Editor import (converted to PascalCase, default: Default)",
-    )
-    parser.add_argument(
-        "--reuse-anim",
-        action="store_true",
-        default=False,
-        help="Automatically reuse existing animated FBX file if found and skip Steps 1-4 without prompting",
-    )
-    parser.add_argument(
-        "--force-mixamo",
-        action="store_true",
-        default=False,
-        help="Force running Steps 1-4 (Mixamo upload & download) even if an existing animated FBX file is found",
-    )
-
     args = parser.parse_args()
 
     blender_bin = find_blender_binary(args.blender_path)
     print(f"Using Blender binary at: {blender_bin}")
 
-    out_dir = os.path.abspath(args.output_dir)
+    out_dir = os.path.abspath(args.output)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Resolve input USDZ path and model_name (xxx)
-    usdz_path = os.path.abspath(args.input_usdz)
-    if not os.path.exists(usdz_path) and args.step in ["all", "prep"]:
-        ref_path = os.path.abspath(os.path.join("reference", "1_model_orig.usdz"))
-        if os.path.exists(ref_path):
-            usdz_path = ref_path
-        else:
-            sys.exit(f"Error: Input file '{args.input_usdz}' not found.")
+    # Determine execution mode and model name
+    usdz_path = None
+    input_anim_path = None
+    use_mixamo_session = False
 
-    model_name = to_snake_case(usdz_path)
+    if args.input_anim:
+        input_anim_path = os.path.abspath(args.input_anim)
+        if not os.path.exists(input_anim_path):
+            sys.exit(f"Error: Animated FBX file '{args.input_anim}' not found.")
+        if args.input:
+            model_name = to_snake_case(args.input)
+        else:
+            model_name = parse_anim_info_from_fbx(input_anim_path, "model")[0]
+            if model_name == "model":
+                model_name = to_snake_case(input_anim_path)
+    elif args.input_mixamo:
+        use_mixamo_session = True
+        if args.input:
+            model_name = to_snake_case(args.input)
+        elif isinstance(args.input_mixamo, str):
+            model_name = to_snake_case(args.input_mixamo)
+        else:
+            candidates = check_existing_anim_fbx(out_dir, "model", None)
+            if candidates:
+                model_name = parse_anim_info_from_fbx(candidates[0], "model")[0]
+            else:
+                model_name = "character"
+    elif args.input:
+        usdz_path = os.path.abspath(args.input)
+        if not os.path.exists(usdz_path) and args.step in ["all", "prep"]:
+            sys.exit(f"Error: Input USDZ file '{args.input}' not found.")
+        model_name = to_snake_case(usdz_path)
+    elif args.step != "all":
+        model_name = "model"
+    else:
+        sys.exit(
+            "Error: Please specify an input flag:\n"
+            "  --input <usdz_file>     : Convert USDZ, upload to Mixamo, and export USD/SE assets (Steps 1-6)\n"
+            "  --input-anim <fbx_file> : Process existing Mixamo FBX and export USD/SE assets (Steps 5-6)\n"
+            "  --input-mixamo          : Select new action for already-uploaded Mixamo character (Steps 4-6)"
+        )
+
     print(f"Pipeline target model name (xxx): '{model_name}'")
 
+    # Mode 1: --input-anim (Process provided Mixamo animation FBX directly: Steps 5-6)
+    if input_anim_path and args.step in ["all", "base", "anim"]:
+        anim_fbx_path = input_anim_path
+        anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, model_name)
+        print(f"\nProcessing provided Mixamo animation FBX: {anim_fbx_path}")
+        print(f"Detected animation slug: '{anim_slug}', title: '{anim_raw_name}'")
+
+        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
+        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
+
+        if args.import_to_se or args.step == "se":
+            step7_import_to_spatial_editor(
+                se_project_dir=args.import_to_se if args.import_to_se else out_dir,
+                scene_name=args.scene,
+                model_name=model_name,
+                anim_slug=anim_slug,
+                anim_raw_name=anim_raw_name,
+                base_usdz_path=base_usdz_path,
+                anim_usdc_path=anim_usdc_path,
+            )
+        print("\nPipeline execution finished successfully!")
+        return
+
+    # Mode 2: --input-mixamo (Reuse uploaded Mixamo character session: Steps 4-6)
+    if use_mixamo_session and args.step in ["all", "mixamo", "base", "anim"]:
+        anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(
+            zip_path=None, output_dir=out_dir, model_name=model_name, skip_upload=True
+        )
+        if not anim_fbx_path:
+            sys.exit("Error: Failed to capture Mixamo animation download.")
+
+        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
+        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
+
+        if args.import_to_se or args.step == "se":
+            step7_import_to_spatial_editor(
+                se_project_dir=args.import_to_se if args.import_to_se else out_dir,
+                scene_name=args.scene,
+                model_name=model_name,
+                anim_slug=anim_slug,
+                anim_raw_name=anim_raw_name,
+                base_usdz_path=base_usdz_path,
+                anim_usdc_path=anim_usdc_path,
+            )
+        print("\nPipeline execution finished successfully!")
+        return
+
+    # Mode 3: --input (Full USDZ -> Mixamo -> USD -> SE pipeline: Steps 1-6)
     zip_path = os.path.join(out_dir, f"{model_name}_upload_to_mixamo.zip")
 
-    # Check if an existing animated FBX file is found before running Phase 1 (Steps 1-4)
-    existing_candidates = check_existing_anim_fbx(out_dir, model_name, args.anim_fbx)
-    reuse_existing = False
-    selected_fbx = None
-    anim_slug = None
-    anim_raw_name = None
-
-    if existing_candidates and args.step in ["all", "prep"]:
-        if args.reuse_anim:
-            reuse_existing = True
-            selected_fbx = existing_candidates[0]
-        elif args.force_mixamo:
-            reuse_existing = False
-        else:
-            print("\n" + "=" * 70)
-            print(f"Found {len(existing_candidates)} existing animation FBX file(s) for '{model_name}':")
-            for i, cand in enumerate(existing_candidates):
-                mtime_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(cand)))
-                print(f"  [{i+1}] {os.path.basename(cand)} ({os.path.getsize(cand):,} bytes, modified {mtime_str})")
-            print("=" * 70)
-
-            if sys.stdin.isatty():
-                try:
-                    resp = input(f"\nDo you want to REUSE '{os.path.basename(existing_candidates[0])}' and skip Steps 1-4? [Y/n]: ").strip().lower()
-                    if resp in ["", "y", "yes"]:
-                        reuse_existing = True
-                        selected_fbx = existing_candidates[0]
-                except (EOFError, KeyboardInterrupt):
-                    pass
-            else:
-                print("Non-interactive terminal: Automatically reusing existing animation FBX file to save time.")
-                reuse_existing = True
-                selected_fbx = existing_candidates[0]
-
-    # Phase 1: Pre-Mixamo Steps (Steps 1, 2, 3)
-    if args.step in ["all", "prep"] and not reuse_existing:
+    # Steps 1-3: USDZ conversion & zip package
+    if args.step in ["all", "prep"]:
         step2_folder, fbx_out = step2_convert_usdz_to_fbx(blender_bin, usdz_path, out_dir, model_name)
         zip_path = step3_package_for_mixamo(step2_folder, fbx_out, out_dir, model_name)
 
     base_usdz_path = os.path.join(out_dir, f"{model_name}_anim_base.usdz")
     anim_usdc_path = None
+    anim_slug = None
+    anim_raw_name = None
 
-    # Locate or acquire Mixamo animated FBX for post-processing steps (Steps 5, 6)
     if args.step in ["all", "mixamo", "base", "anim", "se"]:
-        if reuse_existing and selected_fbx:
-            anim_fbx_path = selected_fbx
-            anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, model_name)
-            print(f"\nSkipped Steps 1-4! Reusing existing animation FBX: {anim_fbx_path}")
-        else:
-            anim_fbx_path = None
-            if args.anim_fbx and os.path.exists(args.anim_fbx):
-                anim_fbx_path = os.path.abspath(args.anim_fbx)
-                anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, model_name)
-            else:
-                if existing_candidates:
-                    anim_fbx_path = existing_candidates[0]
-                    anim_slug, anim_raw_name = parse_anim_info_from_fbx(anim_fbx_path, model_name)
-
-            if not anim_fbx_path and args.auto_browser and os.path.exists(zip_path) and args.step != "se":
-                anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(zip_path, out_dir, model_name)
+        anim_fbx_path = None
+        if args.auto_browser and os.path.exists(zip_path) and args.step != "se":
+            anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(zip_path, out_dir, model_name)
 
         if not anim_fbx_path and args.step not in ["prep", "se"]:
             print("\n" + "=" * 60)
@@ -942,7 +985,7 @@ def main():
             anim_slug=anim_slug or "animation",
             anim_raw_name=anim_raw_name or "Animation",
             base_usdz_path=base_usdz_path,
-            anim_usdc_path=anim_usdc_path
+            anim_usdc_path=anim_usdc_path,
         )
 
     print("\nPipeline execution finished successfully!")
