@@ -183,6 +183,52 @@ def save_image_bytes(img_bytes: bytes, output_path: Path, target_mime_type: str)
                 f.write(img_bytes)
 
 
+def remove_green_background(input_path: Path) -> bool:
+    """
+    Removes the green 0x00FF00 chroma key background from an image and saves it as a transparent PNG.
+    Matches algorithm in create-sprites-transparent skill.
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        img = cv2.imread(str(input_path))
+        if img is None:
+            return False
+
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        lower_green = np.array([35, 40, 40])
+        upper_green = np.array([85, 255, 255])
+
+        mask = cv2.inRange(hsv, lower_green, upper_green)
+        mask_inv = cv2.bitwise_not(mask)
+
+        b, g, r = cv2.split(img)
+        rgba = [b, g, r, mask_inv]
+        result = cv2.merge(rgba)
+
+        cv2.imwrite(str(input_path), result)
+        return True
+    except Exception:
+        try:
+            from PIL import Image
+            import numpy as np
+
+            img = Image.open(input_path).convert("RGBA")
+            data = np.array(img)
+
+            r, g, b, a = data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3]
+            green_mask = (g > 80) & (g > r * 1.1) & (g > b * 1.1)
+            data[:, :, 3][green_mask] = 0
+
+            result = Image.fromarray(data)
+            result.save(input_path, "PNG")
+            return True
+        except Exception as ex:
+            print(f"Warning: Failed to process transparent background: {ex}", file=sys.stderr)
+            return False
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         prog="gemini-image",
@@ -192,18 +238,11 @@ def parse_arguments():
   # Text-to-Image with 4K resolution and 16:9 ratio:
   gemini-image "A majestic dragon sitting on a snow-peaked mountain at dusk" -r 16:9 -s 4K -o dragon.png
 
-  # Image-to-Image editing (using -i or passing image path directly):
+  # Generate transparent PNG sprite:
+  gemini-image "A cute pixel art potions bottle sprite" --transparent -s 2K -o potion.png
+
+  # Image-to-Image editing:
   gemini-image "Transform this portrait into a futuristic cybernetic character" -i person.jpg -o cyberpunk.png
-  gemini-image person.jpg "Transform this portrait into a futuristic cybernetic character" -s 4K
-
-  # Multi-image input (up to 14 reference images):
-  gemini-image "An office group photo of these people making funny faces" -i user1.png -i user2.png -i user3.png -s 2K
-
-  # Multi-turn image editing using previous interaction ID:
-  gemini-image "Update this infographic to be in Spanish" --previous-id <INTERACTION_ID> -r 16:9 -s 2K
-
-  # Select Pro model with search grounding & image search:
-  gemini-image "Detailed painting of a Timareta butterfly resting on a flower" -m 3-pro --search --image-search -r 16:9 -s 4K
 """
     )
 
@@ -263,6 +302,12 @@ def parse_arguments():
         dest="mime_format",
         choices=["png", "jpeg", "jpg", "webp"],
         help="Output image format (png, jpeg, webp). Default is inferred from output filename extension."
+    )
+    parser.add_argument(
+        "--transparent-background", "--transparent",
+        dest="transparent_bg",
+        action="store_true",
+        help="Automatically generate with a 0x00FF00 chroma key background and remove it to output a transparent PNG."
     )
     parser.add_argument(
         "--previous-id", "--prev", "--interaction-id",
@@ -371,6 +416,16 @@ def main():
 
     prompt = " ".join(text_prompts).strip()
 
+    # Apply transparent background prompt modifier if enabled
+    if args.transparent_bg:
+        chroma_suffix = "use 0x00FF00 chroma key background."
+        if prompt:
+            if not prompt.endswith("."):
+                prompt += "."
+            prompt += f" {chroma_suffix}"
+        else:
+            prompt = chroma_suffix
+
     if not prompt and not raw_image_paths and not video_args:
         print("Error: Please provide a prompt, input image(s), or video. Run 'gemini-image --help' for usage info.", file=sys.stderr)
         sys.exit(1)
@@ -409,8 +464,12 @@ def main():
         else:
             output_path = path_obj
 
-    # Infer output format / target_mime_type
-    if args.mime_format:
+    # Infer output format / target_mime_type (forced to PNG for transparent background)
+    if args.transparent_bg:
+        target_mime_type = "image/png"
+        if output_path.suffix.lower() != ".png":
+            output_path = output_path.with_suffix(".png")
+    elif args.mime_format:
         fmt = args.mime_format.lower()
         target_mime_type = "image/jpeg" if fmt in ["jpeg", "jpg"] else f"image/{fmt}"
     else:
@@ -457,6 +516,9 @@ def main():
             if hasattr(result, "generated_images") and result.generated_images:
                 img_obj = result.generated_images[0].image
                 save_image_bytes(img_obj.image_bytes, output_path, target_mime_type)
+                if args.transparent_bg:
+                    if remove_green_background(output_path):
+                        print(f"[gemini-image] Successfully removed green chroma key background for transparency: {output_path}")
                 print(f"Successfully saved image to {output_path}")
             else:
                 print("Error: No image returned from Imagen API.", file=sys.stderr)
@@ -549,6 +611,9 @@ def main():
             if extracted_images:
                 # Save primary image
                 save_image_bytes(extracted_images[0], output_path, target_mime_type)
+                if args.transparent_bg:
+                    if remove_green_background(output_path):
+                        print(f"[gemini-image] Successfully removed green chroma key background for transparency: {output_path}")
                 print(f"Successfully saved generated image to {output_path}")
 
                 # Save any additional interleaved illustrations (if model produced multiple distinct images)
@@ -556,6 +621,9 @@ def main():
                     extra_filename = f"{output_path.stem}_{idx}{output_path.suffix}"
                     extra_path = output_path.parent / extra_filename
                     save_image_bytes(extra_bytes, extra_path, target_mime_type)
+                    if args.transparent_bg:
+                        if remove_green_background(extra_path):
+                            print(f"[gemini-image] Successfully removed green chroma key background for transparency: {extra_path}")
                     print(f"Saved additional illustration to {extra_path}")
             else:
                 if hasattr(interaction, "output_text") and interaction.output_text:

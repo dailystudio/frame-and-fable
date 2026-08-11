@@ -1,2 +1,7 @@
-# Project specified files
-outputs
+# Output directory for generated images
+outputs/
+
+# Virtual environment
+.venv/
+__pycache__/
+*.pyc
