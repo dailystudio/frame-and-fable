@@ -25,9 +25,11 @@ A comprehensive Python CLI tool for generating and editing images using the Goog
 - **Resolution Control (`-s` / `--size`)**:
   - `0.5K` (512px), `1K` (1024px), `2K` (~2048px), `4K` (~4096px)
 
-- **Default Output Directory (`-o` / `--output`)**:
+- **Default Output Directory & File Naming (`-o` / `--output`)**:
   - Automatically places generated images in `./outputs/` (ignored in `.gitignore`).
-  - Supports specifying custom target directories (e.g., `-o ./my_folder/`) or custom image filenames.
+  - By default, uses the unique Gemini interaction ID (e.g., `xfkdaud81kausd.png`) or a unique token instead of a static name.
+  - When generating multiple images (a series), names use sequential zero-indexed suffixes with the same prefix: `xfkdaud81kausd_0.png`, `xfkdaud81kausd_1.png`, etc.
+  - Supports specifying custom target directories (e.g., `-o ./my_folder/`) or custom image filenames (e.g., `-o dragon.png` or `-o storyboard.png` -> `storyboard_0.png`, `storyboard_1.png`).
 
 - **Multi-Image & Image-to-Image Input (`-i` / `--image` or positional paths)**:
   - Mix text prompt with 1 or up to 14 reference images.
@@ -97,7 +99,7 @@ A comprehensive Python CLI tool for generating and editing images using the Goog
 | `--model` | `-m` | Model to use (`3.1-flash`, `3.1-lite`, `3-pro`, `2.5-flash`, `imagen3`) |
 | `--ratio` | `-r`, `-a` | Aspect ratio (`1:1`, `1:4`, `1:8`, `3:2`, `2:3`, `3:4`, `4:1`, `4:3`, `4:5`, `5:4`, `8:1`, `9:16`, `16:9`, `21:9`) |
 | `--size` | `-s` | Output resolution (`0.5K`, `1K`, `2K`, `4K`) |
-| `--output` | `-o` | Target directory or file path (default: `./outputs/generated_image.png`) |
+| `--output` | `-o` | Target directory or file path (default: `./outputs/<interaction_id>.png`) |
 | `--image` | `-i` | Path(s) to input reference image file(s) |
 | `--video` | | Path to local video file or YouTube URL |
 | `--previous-id` | `--prev` | ID of previous interaction for multi-turn editing |

@@ -8,6 +8,8 @@ https://ai.google.dev/gemini-api/docs/image-generation
 
 import sys
 import os
+import re
+import secrets
 import argparse
 import base64
 import mimetypes
@@ -229,6 +231,64 @@ def remove_green_background(input_path: Path) -> bool:
             return False
 
 
+def sanitize_id_for_filename(raw_id: Optional[str]) -> str:
+    """Extract and sanitize interaction ID or generate a random hex token if unavailable."""
+    if raw_id:
+        base_id = str(raw_id).strip().split("/")[-1]
+        cleaned = re.sub(r"[^\w\-]", "_", base_id).strip("_")
+        if cleaned:
+            return cleaned
+    return secrets.token_hex(8)
+
+
+def save_generated_images(
+    images: List[bytes],
+    out_dir: Path,
+    custom_stem: Optional[str],
+    custom_ext: Optional[str],
+    default_ext: str,
+    target_mime_type: str,
+    raw_id: Optional[str],
+    transparent_bg: bool = False
+) -> List[Path]:
+    """
+    Save one or multiple generated images to disk.
+    If single image and custom stem specified: <custom_stem>.<ext>
+    If single image and default/dir: <interaction_id>.<ext>
+    If multiple images (a series): <prefix>_0.<ext>, <prefix>_1.<ext>, ...
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = custom_ext if custom_ext else default_ext
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    if transparent_bg and ext.lower() != ".png":
+        ext = ".png"
+
+    base_prefix = custom_stem if custom_stem else sanitize_id_for_filename(raw_id)
+    saved_files: List[Path] = []
+
+    if len(images) == 1:
+        file_path = out_dir / f"{base_prefix}{ext}"
+        save_image_bytes(images[0], file_path, target_mime_type)
+        if transparent_bg:
+            if remove_green_background(file_path):
+                print(f"[gemini-image] Successfully removed green chroma key background for transparency: {file_path}")
+        print(f"Successfully saved generated image to {file_path}")
+        saved_files.append(file_path)
+    elif len(images) > 1:
+        for idx, img_bytes in enumerate(images):
+            file_path = out_dir / f"{base_prefix}_{idx}{ext}"
+            save_image_bytes(img_bytes, file_path, target_mime_type)
+            if transparent_bg:
+                if remove_green_background(file_path):
+                    print(f"[gemini-image] Successfully removed green chroma key background for transparency: {file_path}")
+            print(f"Successfully saved generated image ({idx + 1}/{len(images)}) to {file_path}")
+            saved_files.append(file_path)
+
+    return saved_files
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         prog="gemini-image",
@@ -295,7 +355,7 @@ def parse_arguments():
     parser.add_argument(
         "-o", "--output",
         default=None,
-        help="Target output directory (e.g., ./outputs or -o ./dir/) or specific image file path (default: ./outputs/generated_image.png)."
+        help="Target output directory (e.g., ./outputs or -o ./dir/) or specific image file path (default: ./outputs/<interaction_id>.png)."
     )
     parser.add_argument(
         "-f", "--format",
@@ -450,36 +510,52 @@ def main():
         print("[gemini-image] Note: gemini-3.1-flash-lite-image only supports 1K resolution. Setting image_size to 1K.")
         image_size = "1K"
 
-    # Resolve Output Path (Default directory: ./outputs)
+    # Resolve Output Path & Target Format (Default directory: ./outputs)
     default_dir = Path("outputs")
-    default_filename = "generated_image.png"
+    custom_stem: Optional[str] = None
+    custom_ext: Optional[str] = None
+    out_dir: Path = default_dir
 
-    if not args.output:
-        output_path = default_dir / default_filename
-    else:
+    if args.output:
         output_arg = args.output.strip()
         path_obj = Path(output_arg)
-        if path_obj.is_dir() or output_arg.endswith(os.sep) or output_arg.endswith("/") or (not path_obj.suffix and not path_obj.exists()):
-            output_path = path_obj / default_filename
+        if path_obj.is_dir() or output_arg.endswith(os.sep) or output_arg.endswith("/"):
+            out_dir = path_obj
+        elif path_obj.suffix:
+            out_dir = path_obj.parent
+            custom_stem = path_obj.stem
+            custom_ext = path_obj.suffix.lower()
         else:
-            output_path = path_obj
+            out_dir = path_obj
 
-    # Infer output format / target_mime_type (forced to PNG for transparent background)
+    # Infer output format / target_mime_type and default extension
     if args.transparent_bg:
         target_mime_type = "image/png"
-        if output_path.suffix.lower() != ".png":
-            output_path = output_path.with_suffix(".png")
+        default_ext = ".png"
     elif args.mime_format:
         fmt = args.mime_format.lower()
-        target_mime_type = "image/jpeg" if fmt in ["jpeg", "jpg"] else f"image/{fmt}"
-    else:
-        ext = output_path.suffix.lower()
-        if ext in [".jpg", ".jpeg"]:
+        if fmt in ["jpeg", "jpg"]:
             target_mime_type = "image/jpeg"
-        elif ext == ".webp":
+            default_ext = ".jpg"
+        elif fmt == "webp":
             target_mime_type = "image/webp"
+            default_ext = ".webp"
         else:
             target_mime_type = "image/png"
+            default_ext = ".png"
+    elif custom_ext:
+        if custom_ext in [".jpg", ".jpeg"]:
+            target_mime_type = "image/jpeg"
+            default_ext = custom_ext
+        elif custom_ext == ".webp":
+            target_mime_type = "image/webp"
+            default_ext = ".webp"
+        else:
+            target_mime_type = "image/png"
+            default_ext = ".png"
+    else:
+        target_mime_type = "image/png"
+        default_ext = ".png"
 
     # Prepare Client
     client = genai.Client(api_key=api_key)
@@ -498,7 +574,11 @@ def main():
             print(f"[gemini-image] Output Size: {image_size}")
         if args.previous_id:
             print(f"[gemini-image] Previous Interaction ID: {args.previous_id}")
-        print(f"[gemini-image] Output Target: {output_path} ({target_mime_type})")
+        if custom_stem:
+            expected_target = out_dir / f"{custom_stem}{custom_ext or default_ext}"
+            print(f"[gemini-image] Output Target: {expected_target} ({target_mime_type})")
+        else:
+            print(f"[gemini-image] Output Directory: {out_dir} (default naming by interaction ID, format: {default_ext})")
 
     # Handle Imagen 3 vs Gemini Nano Banana models
     if "imagen" in model_name.lower():
@@ -513,13 +593,23 @@ def main():
                 prompt=prompt or "",
                 config=config
             )
+            extracted_images: List[bytes] = []
             if hasattr(result, "generated_images") and result.generated_images:
-                img_obj = result.generated_images[0].image
-                save_image_bytes(img_obj.image_bytes, output_path, target_mime_type)
-                if args.transparent_bg:
-                    if remove_green_background(output_path):
-                        print(f"[gemini-image] Successfully removed green chroma key background for transparency: {output_path}")
-                print(f"Successfully saved image to {output_path}")
+                for gen_img in result.generated_images:
+                    if hasattr(gen_img, "image") and hasattr(gen_img.image, "image_bytes") and gen_img.image.image_bytes:
+                        extracted_images.append(gen_img.image.image_bytes)
+
+            if extracted_images:
+                save_generated_images(
+                    images=extracted_images,
+                    out_dir=out_dir,
+                    custom_stem=custom_stem,
+                    custom_ext=custom_ext,
+                    default_ext=default_ext,
+                    target_mime_type=target_mime_type,
+                    raw_id=None,
+                    transparent_bg=args.transparent_bg
+                )
             else:
                 print("Error: No image returned from Imagen API.", file=sys.stderr)
                 sys.exit(1)
@@ -580,7 +670,9 @@ def main():
             print(f"Generating image with {model_name}...")
             interaction = client.interactions.create(**interaction_args)
 
+            raw_interaction_id = None
             if hasattr(interaction, "id") and interaction.id:
+                raw_interaction_id = interaction.id
                 print(f"Interaction ID: {interaction.id}")
 
             # Process output thinking steps if verbose
@@ -609,22 +701,16 @@ def main():
                 extracted_images.append(base64.b64decode(interaction.output_image.data))
 
             if extracted_images:
-                # Save primary image
-                save_image_bytes(extracted_images[0], output_path, target_mime_type)
-                if args.transparent_bg:
-                    if remove_green_background(output_path):
-                        print(f"[gemini-image] Successfully removed green chroma key background for transparency: {output_path}")
-                print(f"Successfully saved generated image to {output_path}")
-
-                # Save any additional interleaved illustrations (if model produced multiple distinct images)
-                for idx, extra_bytes in enumerate(extracted_images[1:], start=2):
-                    extra_filename = f"{output_path.stem}_{idx}{output_path.suffix}"
-                    extra_path = output_path.parent / extra_filename
-                    save_image_bytes(extra_bytes, extra_path, target_mime_type)
-                    if args.transparent_bg:
-                        if remove_green_background(extra_path):
-                            print(f"[gemini-image] Successfully removed green chroma key background for transparency: {extra_path}")
-                    print(f"Saved additional illustration to {extra_path}")
+                save_generated_images(
+                    images=extracted_images,
+                    out_dir=out_dir,
+                    custom_stem=custom_stem,
+                    custom_ext=custom_ext,
+                    default_ext=default_ext,
+                    target_mime_type=target_mime_type,
+                    raw_id=raw_interaction_id,
+                    transparent_bg=args.transparent_bg
+                )
             else:
                 if hasattr(interaction, "output_text") and interaction.output_text:
                     print(f"Model output text: {interaction.output_text}")
