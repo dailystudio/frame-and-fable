@@ -11,17 +11,17 @@ rigging specifications:
   - Custom User-Defined Rig Specification (`--custom-rig <path.json>`)
 
 Usage Examples:
-    # 1. Rig shadow puppet model (19-joint 2D planar rig + shadow play routine)
-    python3 rig_binder.py --model samples/base_basic_shaded.usdz --rig-type shadow-puppet
+    # 1. Rig standard humanoid model (default 65-joint 3D mocap rig with full fingers/toes)
+    python3 rig_binder.py --model samples/base_basic_shaded.usdz
 
-    # 2. Rig standard humanoid model (65-joint 3D mocap rig with full fingers/toes)
-    python3 rig_binder.py --model samples/base_basic_shaded.usdz --rig-type humanoid-65 --output-dir ./outputs
+    # 2. Rig shadow puppet model (19-joint 2D planar rig + shadow play routine)
+    python3 rig_binder.py --model samples/base_basic_shaded.usdz --rig-type shadow-puppet
 
     # 3. Rig model with custom JSON specification
     python3 rig_binder.py --model character.glb --custom-rig presets/custom_template.json
 
     # 4. Export only USDZ and GLB without animation
-    python3 rig_binder.py --model character.fbx --rig-type humanoid-65 --formats usdz,glb --no-anim
+    python3 rig_binder.py --model character.fbx --formats usdz,glb --no-anim
 """
 
 import argparse
@@ -131,8 +131,8 @@ def main():
     )
     parser.add_argument(
         "--model", "-m",
-        default=None,
-        help="Path to input 3D model file (.usdz, .glb, .gltf, .fbx, .obj). Default: samples/base_basic_shaded.usdz"
+        required=True,
+        help="Path to input 3D model file (.usdz, .glb, .gltf, .fbx, .obj)"
     )
     parser.add_argument(
         "--output-dir", "-o",
@@ -146,8 +146,8 @@ def main():
     )
     parser.add_argument(
         "--rig-type", "-r",
-        default="shadow-puppet",
-        help="Rig preset to apply: 'shadow-puppet' (19 joints, 2D planar), 'humanoid-65' (65 joints standard humanoid 3D), 'biped-24' (24 joints game biped). Default: shadow-puppet"
+        default="humanoid-65",
+        help="Rig preset to apply: 'humanoid-65' (65 joints standard humanoid 3D), 'shadow-puppet' (19 joints, 2D planar), 'biped-24' (24 joints game biped). Default: humanoid-65"
     )
     parser.add_argument(
         "--custom-rig", "-c",
@@ -187,14 +187,6 @@ def main():
 
     # 2. Resolve Input Model
     input_path = args.model
-    if not input_path:
-        default_sample = os.path.join(script_dir, "samples", "base_basic_shaded.usdz")
-        if os.path.exists(default_sample):
-            input_path = default_sample
-        else:
-            print("[ERROR] No input model specified. Use --model <path>.")
-            sys.exit(1)
-
     if not os.path.isabs(input_path):
         input_path = os.path.abspath(input_path)
 

@@ -56,31 +56,45 @@ It supports both **strict 2D planar rigs** (such as Chinese Shadow Play puppets 
 
 ---
 
+## 📋 Environment & Dependencies
+
+1. **Python Virtual Environment (`.venv`)**:
+   ```bash
+   # Create and activate virtual environment
+   python3 -m venv .venv
+   source .venv/bin/activate
+
+   # Install dependencies
+   pip install -r requirements.txt
+   ```
+
+2. **Blender 4.x**: Blender binary installed (e.g. `/Applications/Blender.app/Contents/MacOS/Blender`).
+
+---
+
 ## 🚀 Quick Start & Usage
 
 ```bash
-# 1. Rig shadow puppet model (19 joints, 2D planar locking + 100-frame shadow play routine)
-python3 rig_binder.py \
+# 1. Rig standard 3D humanoid model (default humanoid-65 rig, 65 joints, full 5-finger hand articulation)
+.venv/bin/python rig_binder.py \
+  --model samples/base_basic_shaded.usdz \
+  --output-dir outputs/humanoid
+
+# 2. Rig shadow puppet model (19 joints, 2D planar locking + 100-frame shadow play routine)
+.venv/bin/python rig_binder.py \
   --model samples/base_basic_shaded.usdz \
   --output-dir outputs/shadow_play \
   --rig-type shadow-puppet
 
-# 2. Rig standard 3D humanoid model (65 joints, full 5-finger hand articulation)
-python3 rig_binder.py \
-  --model samples/base_basic_shaded.usdz \
-  --output-dir outputs/humanoid \
-  --rig-type humanoid-65
-
 # 3. Rig model with custom user-defined JSON skeleton
-python3 rig_binder.py \
+.venv/bin/python rig_binder.py \
   --model my_character.glb \
   --output-dir outputs/custom \
   --custom-rig presets/custom_template.json
 
 # 4. Generate only pure rigged USDZ and GLB (skip animation & previews)
-python3 rig_binder.py \
+.venv/bin/python rig_binder.py \
   --model character.usdz \
-  --rig-type humanoid-65 \
   --formats usdz,glb \
   --no-anim
 ```
@@ -92,10 +106,10 @@ python3 rig_binder.py \
 ```text
 options:
   -h, --help            show this help message and exit
-  --model, -m MODEL     Path to input 3D model file (.usdz, .glb, .gltf, .fbx, .obj)
+  --model, -m MODEL     (Required) Path to input 3D model file (.usdz, .glb, .gltf, .fbx, .obj)
   --output-dir, -o DIR  Output directory for generated files (default: outputs/)
   --name, -n NAME       Base name for outputs (default: derived from input file name)
-  --rig-type, -r TYPE   Preset: 'shadow-puppet' (19 joints, 2D planar), 'humanoid-65' (65 joints 3D), 'biped-24' (24 joints). Default: shadow-puppet
+  --rig-type, -r TYPE   Preset: 'humanoid-65' (65 joints standard humanoid 3D), 'shadow-puppet' (19 joints, 2D planar), 'biped-24' (24 joints). Default: humanoid-65
   --custom-rig, -c PATH Path to custom user-defined rig configuration JSON file
   --formats, -f FORMATS Comma-separated export formats (usdz, glb, blend, fbx. default: usdz,glb,blend)
   --no-anim             Generate only pure rigged model without animation routine
