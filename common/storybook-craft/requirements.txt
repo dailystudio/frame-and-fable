@@ -1,0 +1,2 @@
+# storybook-craft uses Python standard library only (no external dependencies required).
+# Compatible with Python 3.8+
