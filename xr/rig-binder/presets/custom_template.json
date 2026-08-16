@@ -1,0 +1,41 @@
+{
+  "name": "custom_rig_example",
+  "display_name": "Custom User Defined Rig Specification",
+  "type": "standard_3d",
+  "description": "Example template for defining custom skeletons. You can reference built-in landmark keys or specify normalized relative bounding-box coordinates [x, y, z] (from 0.0 to 1.0 or -1.0 to 1.0).",
+  "joints_count": 5,
+  "normal_axis": null,
+  "lock_out_of_plane": false,
+  "bones": [
+    {
+      "name": "root",
+      "parent": null,
+      "head_key": "root",
+      "tail_offset": [0, 0, 0.1]
+    },
+    {
+      "name": "body_main",
+      "parent": "root",
+      "head_key": "waist",
+      "tail_key": "chest"
+    },
+    {
+      "name": "head_main",
+      "parent": "body_main",
+      "head_key": "neck",
+      "tail_key": "head_top"
+    },
+    {
+      "name": "arm_left",
+      "parent": "body_main",
+      "head_key": "l_shoulder",
+      "tail_key": "l_hand"
+    },
+    {
+      "name": "arm_right",
+      "parent": "body_main",
+      "head_key": "r_shoulder",
+      "tail_key": "r_hand"
+    }
+  ]
+}

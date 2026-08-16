@@ -1,0 +1,39 @@
+{
+  "name": "biped_24",
+  "display_name": "Standard Game Biped 24-Joint Rig",
+  "type": "standard_3d",
+  "description": "Streamlined 24-joint game-ready humanoid rig without individual finger bones (single hand and foot pivots).",
+  "joints_count": 24,
+  "normal_axis": null,
+  "lock_out_of_plane": false,
+  "bones": [
+    { "name": "root", "parent": null, "head_key": "root", "tail_offset": [0, 0, 0.1] },
+    { "name": "hips", "parent": "root", "head_key": "hips", "tail_key": "spine" },
+    { "name": "spine", "parent": "hips", "head_key": "spine", "tail_key": "spine1" },
+    { "name": "spine1", "parent": "spine", "head_key": "spine1", "tail_key": "chest" },
+    { "name": "chest", "parent": "spine1", "head_key": "chest", "tail_key": "neck" },
+    { "name": "neck", "parent": "chest", "head_key": "neck", "tail_key": "head" },
+    { "name": "head", "parent": "neck", "head_key": "head", "tail_key": "head_top" },
+    { "name": "head_top", "parent": "head", "head_key": "head_top", "tail_offset": [0, 0, 0.08] },
+
+    { "name": "clavicle.L", "parent": "chest", "head_key": "l_clavicle_mid", "tail_key": "l_shoulder" },
+    { "name": "upper_arm.L", "parent": "clavicle.L", "head_key": "l_shoulder", "tail_key": "l_elbow" },
+    { "name": "forearm.L", "parent": "upper_arm.L", "head_key": "l_elbow", "tail_key": "l_wrist" },
+    { "name": "hand.L", "parent": "forearm.L", "head_key": "l_wrist", "tail_key": "l_hand" },
+
+    { "name": "clavicle.R", "parent": "chest", "head_key": "r_clavicle_mid", "tail_key": "r_shoulder" },
+    { "name": "upper_arm.R", "parent": "clavicle.R", "head_key": "r_shoulder", "tail_key": "r_elbow" },
+    { "name": "forearm.R", "parent": "upper_arm.R", "head_key": "r_elbow", "tail_key": "r_wrist" },
+    { "name": "hand.R", "parent": "forearm.R", "head_key": "r_wrist", "tail_key": "r_hand" },
+
+    { "name": "thigh.L", "parent": "hips", "head_key": "l_hip", "tail_key": "l_knee" },
+    { "name": "calf.L", "parent": "thigh.L", "head_key": "l_knee", "tail_key": "l_ankle" },
+    { "name": "foot.L", "parent": "calf.L", "head_key": "l_ankle", "tail_key": "l_toe" },
+    { "name": "toe.L", "parent": "foot.L", "head_key": "l_toe", "tail_key": "l_toe_tip" },
+
+    { "name": "thigh.R", "parent": "hips", "head_key": "r_hip", "tail_key": "r_knee" },
+    { "name": "calf.R", "parent": "thigh.R", "head_key": "r_knee", "tail_key": "r_ankle" },
+    { "name": "foot.R", "parent": "calf.R", "head_key": "r_ankle", "tail_key": "r_toe" },
+    { "name": "toe.R", "parent": "foot.R", "head_key": "r_toe", "tail_key": "r_toe_tip" }
+  ]
+}

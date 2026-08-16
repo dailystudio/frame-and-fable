@@ -1,0 +1,30 @@
+{
+  "name": "shadow_puppet_19",
+  "display_name": "Chinese Shadow Play 19-Joint Pure Planar Rig",
+  "type": "planar_2d",
+  "description": "Universal 19-joint pure skeletal rig for Chinese Shadow Puppets (皮影戏) with strict 2D planar locking and hinge alignment.",
+  "joints_count": 19,
+  "normal_axis": [0, 1, 0],
+  "lock_out_of_plane": true,
+  "bones": [
+    { "name": "root", "parent": null, "head_key": "root", "tail_offset": [0, 0, 0.2] },
+    { "name": "waist", "parent": "root", "head_key": "waist", "tail_key": "spine" },
+    { "name": "spine", "parent": "waist", "head_key": "spine", "tail_key": "neck" },
+    { "name": "neck", "parent": "spine", "head_key": "neck", "tail_key": "head" },
+    { "name": "head", "parent": "neck", "head_key": "head", "tail_key": "head_top" },
+    { "name": "shoulder.L", "parent": "spine", "head_key": "l_clavicle_mid", "tail_key": "l_shoulder" },
+    { "name": "upper_arm.L", "parent": "shoulder.L", "head_key": "l_shoulder", "tail_key": "l_elbow" },
+    { "name": "elbow.L", "parent": "upper_arm.L", "head_key": "l_elbow", "tail_key": "l_wrist" },
+    { "name": "wrist.L", "parent": "elbow.L", "head_key": "l_wrist", "tail_key": "l_hand" },
+    { "name": "shoulder.R", "parent": "spine", "head_key": "r_clavicle_mid", "tail_key": "r_shoulder" },
+    { "name": "upper_arm.R", "parent": "shoulder.R", "head_key": "r_shoulder", "tail_key": "r_elbow" },
+    { "name": "elbow.R", "parent": "upper_arm.R", "head_key": "r_elbow", "tail_key": "r_wrist" },
+    { "name": "wrist.R", "parent": "elbow.R", "head_key": "r_wrist", "tail_key": "r_hand" },
+    { "name": "thigh.L", "parent": "waist", "head_key": "l_hip", "tail_key": "l_knee" },
+    { "name": "knee.L", "parent": "thigh.L", "head_key": "l_knee", "tail_key": "l_ankle" },
+    { "name": "ankle.L", "parent": "knee.L", "head_key": "l_ankle", "tail_key": "l_foot" },
+    { "name": "thigh.R", "parent": "waist", "head_key": "r_hip", "tail_key": "r_knee" },
+    { "name": "knee.R", "parent": "thigh.R", "head_key": "r_knee", "tail_key": "r_ankle" },
+    { "name": "ankle.R", "parent": "knee.R", "head_key": "r_ankle", "tail_key": "r_foot" }
+  ]
+}

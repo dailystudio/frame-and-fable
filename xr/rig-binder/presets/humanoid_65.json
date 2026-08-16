@@ -1,0 +1,85 @@
+{
+  "name": "humanoid_65",
+  "display_name": "Standard Humanoid 65-Joint 3D Mocap Rig",
+  "type": "standard_3d",
+  "description": "Industry-standard 65-joint full 3D humanoid skeleton with complete 5-finger articulated hand chains, facial anchors, multi-segment spine, and articulated feet/toes.",
+  "joints_count": 65,
+  "normal_axis": null,
+  "lock_out_of_plane": false,
+  "bones": [
+    { "name": "root", "parent": null, "head_key": "root", "tail_offset": [0, 0, 0.1] },
+    { "name": "hips", "parent": "root", "head_key": "hips", "tail_key": "spine" },
+    { "name": "spine", "parent": "hips", "head_key": "spine", "tail_key": "spine1" },
+    { "name": "spine1", "parent": "spine", "head_key": "spine1", "tail_key": "spine2" },
+    { "name": "spine2", "parent": "spine1", "head_key": "spine2", "tail_key": "chest" },
+    { "name": "chest", "parent": "spine2", "head_key": "chest", "tail_key": "neck" },
+    { "name": "neck", "parent": "chest", "head_key": "neck", "tail_key": "head" },
+    { "name": "head", "parent": "neck", "head_key": "head", "tail_key": "head_top" },
+    { "name": "head_top", "parent": "head", "head_key": "head_top", "tail_offset": [0, 0, 0.08] },
+    { "name": "jaw", "parent": "head", "head_key": "jaw", "tail_offset": [0, -0.05, -0.04] },
+    { "name": "eye.L", "parent": "head", "head_key": "l_eye", "tail_offset": [0, -0.03, 0] },
+    { "name": "eye.R", "parent": "head", "head_key": "r_eye", "tail_offset": [0, -0.03, 0] },
+
+    { "name": "clavicle.L", "parent": "chest", "head_key": "l_clavicle_mid", "tail_key": "l_shoulder" },
+    { "name": "upper_arm.L", "parent": "clavicle.L", "head_key": "l_shoulder", "tail_key": "l_elbow" },
+    { "name": "forearm.L", "parent": "upper_arm.L", "head_key": "l_elbow", "tail_key": "l_wrist" },
+    { "name": "hand.L", "parent": "forearm.L", "head_key": "l_wrist", "tail_key": "l_hand" },
+    
+    { "name": "thumb.01.L", "parent": "hand.L", "head_key": "l_thumb_01", "tail_key": "l_thumb_02" },
+    { "name": "thumb.02.L", "parent": "thumb.01.L", "head_key": "l_thumb_02", "tail_key": "l_thumb_03" },
+    { "name": "thumb.03.L", "parent": "thumb.02.L", "head_key": "l_thumb_03", "tail_key": "l_thumb_tip" },
+
+    { "name": "index.01.L", "parent": "hand.L", "head_key": "l_index_01", "tail_key": "l_index_02" },
+    { "name": "index.02.L", "parent": "index.01.L", "head_key": "l_index_02", "tail_key": "l_index_03" },
+    { "name": "index.03.L", "parent": "index.02.L", "head_key": "l_index_03", "tail_key": "l_index_tip" },
+
+    { "name": "middle.01.L", "parent": "hand.L", "head_key": "l_middle_01", "tail_key": "l_middle_02" },
+    { "name": "middle.02.L", "parent": "middle.01.L", "head_key": "l_middle_02", "tail_key": "l_middle_03" },
+    { "name": "middle.03.L", "parent": "middle.02.L", "head_key": "l_middle_03", "tail_key": "l_middle_tip" },
+
+    { "name": "ring.01.L", "parent": "hand.L", "head_key": "l_ring_01", "tail_key": "l_ring_02" },
+    { "name": "ring.02.L", "parent": "ring.01.L", "head_key": "l_ring_02", "tail_key": "l_ring_03" },
+    { "name": "ring.03.L", "parent": "ring.02.L", "head_key": "l_ring_03", "tail_key": "l_ring_tip" },
+
+    { "name": "pinky.01.L", "parent": "hand.L", "head_key": "l_pinky_01", "tail_key": "l_pinky_02" },
+    { "name": "pinky.02.L", "parent": "pinky.01.L", "head_key": "l_pinky_02", "tail_key": "l_pinky_03" },
+    { "name": "pinky.03.L", "parent": "pinky.02.L", "head_key": "l_pinky_03", "tail_key": "l_pinky_tip" },
+
+    { "name": "clavicle.R", "parent": "chest", "head_key": "r_clavicle_mid", "tail_key": "r_shoulder" },
+    { "name": "upper_arm.R", "parent": "clavicle.R", "head_key": "r_shoulder", "tail_key": "r_elbow" },
+    { "name": "forearm.R", "parent": "upper_arm.R", "head_key": "r_elbow", "tail_key": "r_wrist" },
+    { "name": "hand.R", "parent": "forearm.R", "head_key": "r_wrist", "tail_key": "r_hand" },
+
+    { "name": "thumb.01.R", "parent": "hand.R", "head_key": "r_thumb_01", "tail_key": "r_thumb_02" },
+    { "name": "thumb.02.R", "parent": "thumb.01.R", "head_key": "r_thumb_02", "tail_key": "r_thumb_03" },
+    { "name": "thumb.03.R", "parent": "thumb.02.R", "head_key": "r_thumb_03", "tail_key": "r_thumb_tip" },
+
+    { "name": "index.01.R", "parent": "hand.R", "head_key": "r_index_01", "tail_key": "r_index_02" },
+    { "name": "index.02.R", "parent": "index.01.R", "head_key": "r_index_02", "tail_key": "r_index_03" },
+    { "name": "index.03.R", "parent": "index.02.R", "head_key": "r_index_03", "tail_key": "r_index_tip" },
+
+    { "name": "middle.01.R", "parent": "hand.R", "head_key": "r_middle_01", "tail_key": "r_middle_02" },
+    { "name": "middle.02.R", "parent": "middle.01.R", "head_key": "r_middle_02", "tail_key": "r_middle_03" },
+    { "name": "middle.03.R", "parent": "middle.02.R", "head_key": "r_middle_03", "tail_key": "r_middle_tip" },
+
+    { "name": "ring.01.R", "parent": "hand.R", "head_key": "r_ring_01", "tail_key": "r_ring_02" },
+    { "name": "ring.02.R", "parent": "ring.01.R", "head_key": "r_ring_02", "tail_key": "r_ring_03" },
+    { "name": "ring.03.R", "parent": "ring.02.R", "head_key": "r_ring_03", "tail_key": "r_ring_tip" },
+
+    { "name": "pinky.01.R", "parent": "hand.R", "head_key": "r_pinky_01", "tail_key": "r_pinky_02" },
+    { "name": "pinky.02.R", "parent": "pinky.01.R", "head_key": "r_pinky_02", "tail_key": "r_pinky_03" },
+    { "name": "pinky.03.R", "parent": "pinky.02.R", "head_key": "r_pinky_03", "tail_key": "r_pinky_tip" },
+
+    { "name": "thigh.L", "parent": "hips", "head_key": "l_hip", "tail_key": "l_knee" },
+    { "name": "calf.L", "parent": "thigh.L", "head_key": "l_knee", "tail_key": "l_ankle" },
+    { "name": "foot.L", "parent": "calf.L", "head_key": "l_ankle", "tail_key": "l_toe" },
+    { "name": "toe.L", "parent": "foot.L", "head_key": "l_toe", "tail_key": "l_toe_tip" },
+    { "name": "toe_end.L", "parent": "toe.L", "head_key": "l_toe_tip", "tail_offset": [0, -0.05, 0] },
+
+    { "name": "thigh.R", "parent": "hips", "head_key": "r_hip", "tail_key": "r_knee" },
+    { "name": "calf.R", "parent": "thigh.R", "head_key": "r_knee", "tail_key": "r_ankle" },
+    { "name": "foot.R", "parent": "calf.R", "head_key": "r_ankle", "tail_key": "r_toe" },
+    { "name": "toe.R", "parent": "foot.R", "head_key": "r_toe", "tail_key": "r_toe_tip" },
+    { "name": "toe_end.R", "parent": "toe.R", "head_key": "r_toe_tip", "tail_offset": [0, -0.05, 0] }
+  ]
+}
