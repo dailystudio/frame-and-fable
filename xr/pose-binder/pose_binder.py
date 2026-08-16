@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rig Binder (rig-binder): USDZ to Mixamo & Spatial Editor Pipeline
+Pose Binder (pose-binder): USDZ to Mixamo & Spatial Editor Pipeline
 
 Automates the conversion of an input .usdz character model for Mixamo auto-rigging/animation,
 exports the resulting rigged base mesh and animation files back into USD format (.usdz and .usdc),
@@ -821,7 +821,7 @@ def check_existing_anim_fbx(output_dir, model_name, custom_anim_fbx=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Rig Binder (rig-binder): USDZ to Mixamo & Spatial Editor Pipeline"
+        description="Pose Binder (pose-binder): USDZ to Mixamo & Spatial Editor Pipeline"
     )
     parser.add_argument(
         "--input",

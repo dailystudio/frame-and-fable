@@ -1,6 +1,6 @@
-# Architecture & Implementation Specification: Rig Binder (`rig-binder`)
+# Architecture & Implementation Specification: Pose Binder (`pose-binder`)
 
-This document provides an in-depth technical specification of **Rig Binder** ([`rig_binder.py`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/rig-binder/rig_binder.py)). It details the system architecture, Blender CLI background scripting, Playwright browser stealth automation, download interception mechanisms, math transforms, and Spatial Editor USDA scene generation algorithms.
+This document provides an in-depth technical specification of **Pose Binder** ([`pose_binder.py`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/pose_binder.py)). It details the system architecture, Blender CLI background scripting, Playwright browser stealth automation, download interception mechanisms, math transforms, and Spatial Editor USDA scene generation algorithms.
 
 ---
 
@@ -244,7 +244,7 @@ def "nan_ye_gde" (
 
 | Component | License | Licensing Impact |
 | :--- | :--- | :--- |
-| **`rig_binder.py`** | MIT / Proprietary | Can be kept closed-source or released under any open/closed license. |
+| **`pose_binder.py`** | MIT / Proprietary | Can be kept closed-source or released under any open/closed license. |
 | **Blender Executable** | GPL v3 | Invoked purely via CLI subprocess (`subprocess.run`). Per FSF guidelines, command-line process boundaries do not extend GPL to external wrapper scripts. |
 | **Playwright Library** | Apache 2.0 | Permissive commercial license. |
 | **OpenUSD (`pxr`)** | Apache 2.0 | Permissive commercial license. |

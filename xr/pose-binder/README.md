@@ -1,6 +1,6 @@
-# Rig Binder (`rig-binder`): USDZ to Mixamo & Spatial Editor Pipeline
+# Pose Binder (`pose-binder`): USDZ to Mixamo & Spatial Editor Pipeline
 
-**Rig Binder** (`rig-binder`) is an automated Python tool that converts USDZ 3D character models for **Adobe Mixamo** auto-rigging and animation, processes the rigged base mesh into clean T-pose USDZ and animation USDC files using **Blender**, and automatically integrates them into **PICO Spatial Editor** projects.
+**Pose Binder** (`pose-binder`) is an automated Python tool that converts USDZ 3D character models for **Adobe Mixamo** auto-rigging and animation, processes the rigged base mesh into clean T-pose USDZ and animation USDC files using **Blender**, and automatically integrates them into **PICO Spatial Editor** projects.
 
 ---
 
@@ -42,7 +42,7 @@ playwright install chromium
 Convert a character USDZ model, open Mixamo for auto-rigging & animation selection (Steps 1–4), export USD files (Steps 5–6), and optionally import into Spatial Editor (Step 7):
 
 ```bash
-python3 rig_binder.py \
+python3 pose_binder.py \
   --input verify/nan_ye_gde.usdz \
   --output outputs/ \
   --import-to-se ~/Editor/my_project \
@@ -54,7 +54,7 @@ python3 rig_binder.py \
 Skip USDZ conversion and Mixamo upload (Steps 1–4). Directly generate T-pose USDZ base mesh and animation USDC files from a previously downloaded Mixamo FBX file (Steps 5–6), and optionally import into Spatial Editor (Step 7):
 
 ```bash
-python3 rig_binder.py \
+python3 pose_binder.py \
   --input-anim verify/nan_ye_gde_anim_body_block.fbx \
   --output outputs/ \
   --import-to-se ~/Editor/my_project \
@@ -66,7 +66,7 @@ python3 rig_binder.py \
 Skip USDZ conversion and model zip upload (Steps 1–3). Open the interactive Mixamo browser session to pick a new animation action for an already uploaded character, capture the download (Step 4), export USD files (Steps 5–6), and optionally import into Spatial Editor (Step 7):
 
 ```bash
-python3 rig_binder.py \
+python3 pose_binder.py \
   --input-mixamo nan_ye_gde \
   --output outputs/ \
   --import-to-se ~/Editor/my_project \
@@ -114,6 +114,6 @@ options:
 
 ## 📜 License
 
-The pipeline automation script is open and can be integrated into proprietary or commercial projects. See [`ARCHITECTURE.md`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/rig-binder/ARCHITECTURE.md) for licensing and architectural details.
+The pipeline automation script is open and can be integrated into proprietary or commercial projects. See [`ARCHITECTURE.md`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/ARCHITECTURE.md) for licensing and architectural details.
 
 
