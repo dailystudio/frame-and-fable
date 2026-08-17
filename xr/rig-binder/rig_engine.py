@@ -111,69 +111,69 @@ class SkeletalLandmarkExtractor:
 
         # 2. Left Arm Chain (+X)
         l_sh_mask = (
-            (coords[:, 0] >= width * 0.15)
-            & (coords[:, 0] <= width * 0.35)
-            & (coords[:, 2] >= z_min + height * 0.55)
+            (coords[:, 0] >= x_max * 0.20)
+            & (coords[:, 0] <= x_max * 0.42)
+            & (coords[:, 2] >= z_min + height * 0.54)
             & (coords[:, 2] <= z_min + height * 0.68)
         )
-        l_shoulder = cluster(l_sh_mask, (width * 0.24, y_center, z_min + height * 0.62))
+        l_shoulder = cluster(l_sh_mask, (x_max * 0.30, y_center, z_min + height * 0.60))
         l_clavicle_mid = mathutils.Vector(((spine_pos.x + l_shoulder.x) * 0.5, y_center, neck_pos.z))
 
         l_elb_mask = (
-            (coords[:, 0] >= width * 0.38)
-            & (coords[:, 0] <= width * 0.58)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] >= x_max * 0.45)
+            & (coords[:, 0] <= x_max * 0.68)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        l_elbow = cluster(l_elb_mask, (width * 0.48, y_center, z_min + height * 0.59))
+        l_elbow = cluster(l_elb_mask, (x_max * 0.58, y_center, z_min + height * 0.59))
 
         l_wri_mask = (
-            (coords[:, 0] >= width * 0.58)
-            & (coords[:, 0] <= width * 0.78)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] >= x_max * 0.70)
+            & (coords[:, 0] <= x_max * 0.88)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        l_wrist = cluster(l_wri_mask, (width * 0.68, y_center, z_min + height * 0.58))
+        l_wrist = cluster(l_wri_mask, (x_max * 0.80, y_center, z_min + height * 0.59))
 
         l_hand_mask = (
-            (coords[:, 0] > width * 0.75)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] >= x_max * 0.88)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        l_hand = cluster(l_hand_mask, (width * 0.84, y_center, z_min + height * 0.58))
+        l_hand = cluster(l_hand_mask, (x_max * 0.95, y_center, z_min + height * 0.59))
 
         # 3. Right Arm Chain (-X)
         r_sh_mask = (
-            (coords[:, 0] <= -width * 0.15)
-            & (coords[:, 0] >= -width * 0.35)
-            & (coords[:, 2] >= z_min + height * 0.55)
+            (coords[:, 0] <= x_min * 0.20)
+            & (coords[:, 0] >= x_min * 0.42)
+            & (coords[:, 2] >= z_min + height * 0.54)
             & (coords[:, 2] <= z_min + height * 0.68)
         )
-        r_shoulder = cluster(r_sh_mask, (-width * 0.24, y_center, z_min + height * 0.62))
+        r_shoulder = cluster(r_sh_mask, (x_min * 0.30, y_center, z_min + height * 0.60))
         r_clavicle_mid = mathutils.Vector(((spine_pos.x + r_shoulder.x) * 0.5, y_center, neck_pos.z))
 
         r_elb_mask = (
-            (coords[:, 0] <= -width * 0.38)
-            & (coords[:, 0] >= -width * 0.58)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] <= x_min * 0.45)
+            & (coords[:, 0] >= x_min * 0.68)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        r_elbow = cluster(r_elb_mask, (-width * 0.48, y_center, z_min + height * 0.59))
+        r_elbow = cluster(r_elb_mask, (x_min * 0.58, y_center, z_min + height * 0.59))
 
         r_wri_mask = (
-            (coords[:, 0] <= -width * 0.58)
-            & (coords[:, 0] >= -width * 0.78)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] <= x_min * 0.70)
+            & (coords[:, 0] >= x_min * 0.88)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        r_wrist = cluster(r_wri_mask, (-width * 0.68, y_center, z_min + height * 0.58))
+        r_wrist = cluster(r_wri_mask, (x_min * 0.80, y_center, z_min + height * 0.59))
 
         r_hand_mask = (
-            (coords[:, 0] < -width * 0.75)
-            & (coords[:, 2] >= z_min + height * 0.54)
+            (coords[:, 0] <= x_min * 0.88)
+            & (coords[:, 2] >= z_min + height * 0.52)
             & (coords[:, 2] <= z_min + height * 0.66)
         )
-        r_hand = cluster(r_hand_mask, (-width * 0.84, y_center, z_min + height * 0.58))
+        r_hand = cluster(r_hand_mask, (x_min * 0.95, y_center, z_min + height * 0.59))
 
         # 4. Finger chains generation (Left and Right)
         def generate_fingers(wrist, hand, side_sign=1.0):
@@ -549,15 +549,23 @@ def apply_shadow_puppet_animation(armature_obj):
     print("[+] Shadow Play routine animation created.")
 
 
-def apply_humanoid_inspection_animation(armature_obj):
-    """Bakes a 100-frame 3D humanoid inspection routine (T-pose -> A-pose -> breathing -> finger curl -> squat)."""
-    print("[*] Applying 3D Humanoid Inspection performance routine (100 frames)...")
+def apply_humanoid_walk_to_run_animation(armature_obj):
+    """Bakes a realistic 100-frame 3D Humanoid Walk-to-Run progression routine.
+
+    Progression Stages:
+      - Frames 1-10:   Ready Stance -> Smooth transition into first walk stride
+      - Frames 11-45:  Natural Ground Walk Cycle (upright posture, rhythmic arm swing, heel-strikes)
+      - Frames 46-70:  Acceleration & Jogging Phase (forward chest pitch, bent elbows, flight bounce)
+      - Frames 71-92:  Full Athletic Sprint Running (deep thigh drive, high knee lift, runner's arm pump, toe push-off)
+      - Frames 93-100: Controlled Deceleration & return to ready stance
+    """
+    print("[*] Applying 3D Humanoid Walk-to-Run performance routine (100 frames)...")
     bpy.ops.object.select_all(action='DESELECT')
     armature_obj.select_set(True)
     bpy.context.view_layer.objects.active = armature_obj
 
     armature_obj.animation_data_create()
-    action = bpy.data.actions.new(name="Action_Humanoid_Inspection")
+    action = bpy.data.actions.new(name="Action_Humanoid_WalkToRun")
     armature_obj.animation_data.action = action
 
     bpy.ops.object.mode_set(mode='POSE')
@@ -573,51 +581,156 @@ def apply_humanoid_inspection_animation(armature_obj):
                 b.location = (tx, ty, tz)
                 b.keyframe_insert(data_path="location", frame=frame)
 
-    all_bones = list(pb.keys())
-    for b in all_bones:
-        kf3d(b, 1, 0, 0, 0)
+    total_frames = 100
 
-    # Frame 25: A-Pose Stance
-    kf3d('upper_arm.L', 25, rx=0, ry=0, rz=-35)
-    kf3d('upper_arm.R', 25, rx=0, ry=0, rz=35)
-    kf3d('spine', 25, rx=2, ry=0, rz=0)
-    kf3d('chest', 25, rx=3, ry=0, rz=0)
-    kf3d('head', 25, rx=-4, ry=0, rz=0)
+    def get_alpha(f):
+        if f <= 10:
+            return (f - 1) / 9.0 * 0.18
+        elif f <= 45:
+            return 0.18 + (f - 10) / 35.0 * 0.27   # 0.18 -> 0.45 (steady walk)
+        elif f <= 70:
+            return 0.45 + (f - 45) / 25.0 * 0.40   # 0.45 -> 0.85 (acceleration to jog/run)
+        elif f <= 92:
+            return 0.85 + (f - 70) / 22.0 * 0.15   # 0.85 -> 1.00 (peak sprint)
+        else:
+            decay = (f - 92) / 8.0
+            return 1.0 * (1.0 - decay) + 0.05 * decay
 
-    # Frame 50: Articulated Hands & Finger Curl Check
-    kf3d('upper_arm.L', 50, rx=30, ry=0, rz=-20)
-    kf3d('forearm.L', 50, rx=45, ry=0, rz=0)
-    kf3d('hand.L', 50, rx=10, ry=0, rz=0)
+    # Integrate frequency to build continuous phase phi
+    current_phi = 0.0
+    phi_table = {}
+    alpha_table = {}
+    for f in range(1, total_frames + 1):
+        a = get_alpha(f)
+        alpha_table[f] = a
+        period = 22.0 * (1.0 - a) + 10.0 * a
+        omega = (2.0 * math.pi) / period
+        current_phi += omega
+        phi_table[f] = current_phi
 
-    kf3d('upper_arm.R', 50, rx=30, ry=0, rz=20)
-    kf3d('forearm.R', 50, rx=45, ry=0, rz=0)
-    kf3d('hand.R', 50, rx=10, ry=0, rz=0)
+    # Keyframe every frame for smooth motion
+    for f in range(1, total_frames + 1):
+        a = alpha_table[f]
+        phi = phi_table[f]
 
-    # Curl finger bones if present
-    for f in ['thumb', 'index', 'middle', 'ring', 'pinky']:
-        for seg in ['01', '02', '03']:
-            kf3d(f"{f}.{seg}.L", 50, rx=25, ry=0, rz=0)
-            kf3d(f"{f}.{seg}.R", 50, rx=25, ry=0, rz=0)
+        # 1. Pelvis / Hips
+        hip_tx = math.sin(phi) * (0.022 * (1.0 - a) + 0.006 * a)
+        bounce = math.sin(2.0 * phi - math.pi * 0.5)
+        hip_tz = bounce * (0.015 * (1.0 - a) + 0.045 * a) - 0.035 * a
+        hip_rx = 2.0 * (1.0 - a) + 9.0 * a + math.sin(2.0 * phi) * 2.0 * a
+        hip_rz = -math.cos(phi) * (4.0 * (1.0 - a) + 7.5 * a)
+        hip_ry = math.sin(phi) * (2.5 * (1.0 - a) + 4.0 * a)
 
-    # Frame 75: Light Squat
-    kf3d('hips', 75, tx=0, ty=0, tz=-0.06)
-    kf3d('spine', 75, rx=8, ry=0, rz=0)
-    kf3d('thigh.L', 75, rx=-25, ry=0, rz=0)
-    kf3d('calf.L', 75, rx=40, ry=0, rz=0)
-    kf3d('foot.L', 75, rx=-15, ry=0, rz=0)
+        kf3d('hips', f, rx=hip_rx, ry=hip_ry, rz=hip_rz, tx=hip_tx, ty=0.0, tz=hip_tz)
 
-    kf3d('thigh.R', 75, rx=-25, ry=0, rz=0)
-    kf3d('calf.R', 75, rx=40, ry=0, rz=0)
-    kf3d('foot.R', 75, rx=-15, ry=0, rz=0)
+        # 2. Spine, Chest, Head
+        spine_rx = 1.0 * (1.0 - a) + 4.0 * a
+        chest_rx = 1.5 * (1.0 - a) + 5.5 * a + math.sin(2.0 * phi) * 1.5 * a
+        chest_twist = math.cos(phi) * (3.5 * (1.0 - a) + 7.5 * a)
 
-    # Frame 100: Return to Rest
-    for b in all_bones:
-        kf3d(b, 100, 0, 0, 0)
+        kf3d('spine', f, rx=spine_rx, ry=0.0, rz=chest_twist * 0.3)
+        kf3d('spine1', f, rx=spine_rx, ry=0.0, rz=chest_twist * 0.5)
+        kf3d('spine2', f, rx=spine_rx, ry=0.0, rz=chest_twist * 0.7)
+        kf3d('chest', f, rx=chest_rx, ry=0.0, rz=chest_twist)
+
+        head_rx = -(2.5 * (1.0 - a) + 13.5 * a) + math.sin(2.0 * phi) * 1.2 * a
+        head_rz = -chest_twist * 0.65
+        kf3d('neck', f, rx=-(1.0 * (1.0 - a) + 3.0 * a), ry=0.0, rz=0.0)
+        kf3d('head', f, rx=head_rx, ry=0.0, rz=head_rz)
+
+        # 3. Lower Limbs (Legs, Knees, Feet, Toes)
+        for side, side_phi, sign in [('L', phi, 1.0), ('R', phi + math.pi, -1.0)]:
+            s = math.sin(side_phi)
+            c = math.cos(side_phi)
+
+            if s > 0:
+                thigh_fwd_amp = 24.0 * (1.0 - a) + 52.0 * a
+                thigh_rx = -thigh_fwd_amp * (s ** 0.85)
+            else:
+                thigh_back_amp = 18.0 * (1.0 - a) + 28.0 * a
+                thigh_rx = thigh_back_amp * ((-s) ** 0.85)
+
+            thigh_rz = sign * (1.5 * (1.0 - a) + 3.0 * a * s)
+            kf3d(f'thigh.{side}', f, rx=thigh_rx, ry=0.0, rz=thigh_rz)
+
+            # Knee flexion (swing fold vs stance support)
+            swing_knee_phase = math.sin(side_phi - 0.35)
+            if swing_knee_phase > 0:
+                knee_swing_max = 45.0 * (1.0 - a) + 95.0 * a
+                calf_rx = knee_swing_max * (swing_knee_phase ** 1.3) + (5.0 * (1.0 - a) + 10.0 * a)
+            else:
+                calf_rx = (5.0 * (1.0 - a) + 12.0 * a) * max(0.0, -s)
+
+            kf3d(f'calf.{side}', f, rx=calf_rx, ry=0.0, rz=0.0)
+
+            # Ankle / Foot
+            if c < 0 and s < 0.2:
+                foot_rx = (18.0 * (1.0 - a) + 38.0 * a) * max(0.0, -c)
+            elif s > 0:
+                foot_rx = -(8.0 * (1.0 - a) + 14.0 * a) * max(0.0, s)
+            else:
+                foot_rx = 0.0
+
+            kf3d(f'foot.{side}', f, rx=foot_rx, ry=0.0, rz=0.0)
+
+            # Toe roll on push-off
+            toe_rx = (15.0 * (1.0 - a) + 32.0 * a) * (max(0.0, -c) ** 2.0)
+            kf3d(f'toe.{side}', f, rx=toe_rx, ry=0.0, rz=0.0)
+
+        # 4. Upper Limbs (Clavicles, Arms, Elbows, Hands, Fingers)
+        # Note on T-pose models: In rest pose, arms point horizontally along +/- X.
+        # 1. Base lowering: rotating upper_arm around local X by -78 deg places the arm straight DOWN vertically along -Z.
+        # 2. Front-Back wave swing: once lowered, rotating around local Y swings the arm FORWARD and BACKWARD along the Y-axis.
+        # 3. Forearm flexion: rotating forearm around local Y flexes the elbow FORWARD in front of the torso.
+        for side, arm_phi, sign in [('L', phi + math.pi, 1.0), ('R', phi, -1.0)]:
+            s_arm = math.sin(arm_phi)
+
+            # Shoulder / Clavicle slight pump
+            clav_rx = -2.0 * a * s_arm
+            kf3d(f'clavicle.{side}', f, rx=clav_rx, ry=0.0, rz=-sign * (1.5 * a))
+
+            # Upper Arm:
+            # 1. Base downward vertical stance (-78 deg rx)
+            rx_arm = -78.0
+            
+            # 2. Front-Back wave swing along world Y via local ry:
+            arm_fwd_amp = 22.0 * (1.0 - a) + 48.0 * a
+            arm_back_amp = 16.0 * (1.0 - a) + 32.0 * a
+            if s_arm > 0:
+                ry_arm = -sign * (arm_fwd_amp * s_arm)
+            else:
+                ry_arm = -sign * (arm_back_amp * s_arm)
+
+            kf3d(f'upper_arm.{side}', f, rx=rx_arm, ry=ry_arm, rz=0.0)
+
+            # Forearm Elbow Flexion:
+            # Flexes forward at elbow via local ry (-sign on Left, +sign on Right)
+            # Walking: relaxed ~15-25 deg bend; Running: athletic ~45-80 deg power angle
+            base_elbow = 15.0 * (1.0 - a) + 45.0 * a
+            dynamic_elbow = (12.0 * (1.0 - a) + 35.0 * a) * max(0.0, s_arm)
+            forearm_ry = -sign * (base_elbow + dynamic_elbow)
+            kf3d(f'forearm.{side}', f, rx=0.0, ry=forearm_ry, rz=0.0)
+
+            # Wrist / Hand: flexes in sync with arm drive
+            hand_ry = -sign * ((6.0 * (1.0 - a) + 14.0 * a) * s_arm)
+            kf3d(f'hand.{side}', f, rx=0.0, ry=hand_ry, rz=0.0)
+
+            # Fingers: curl forward from open hand to cupped runner's fist
+            finger_curl = -sign * (15.0 * (1.0 - a) + 35.0 * a)
+            for finger_name in ['thumb', 'index', 'middle', 'ring', 'pinky']:
+                for seg in ['01', '02', '03']:
+                    kf3d(f'{finger_name}.{seg}.{side}', f, rx=0.0, ry=0.0, rz=finger_curl)
 
     bpy.context.scene.frame_start = 1
-    bpy.context.scene.frame_end = 100
+    bpy.context.scene.frame_end = total_frames
     bpy.ops.object.mode_set(mode='OBJECT')
-    print("[+] Humanoid inspection routine animation created.")
+    print("[+] Humanoid walk-to-run progression animation created successfully.")
+
+
+# Alias for backward compatibility
+apply_humanoid_inspection_animation = apply_humanoid_walk_to_run_animation
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -697,14 +810,19 @@ def export_file(filepath, fmt):
             export_animation=True
         )
     elif fmt == 'glb':
-        bpy.ops.export_scene.gltf(
-            filepath=filepath,
-            export_format='GLB',
-            export_skins=True,
-            export_all_influences=True,
-            export_animations=True,
-            export_def_bones=True
-        )
+        gltf_kwargs = {
+            'filepath': filepath,
+            'export_format': 'GLB',
+            'export_skins': True,
+            'export_all_influences': True,
+            'export_animations': True,
+            'export_def_bones': True
+        }
+        # Avoid exporting unrelated unused actions
+        props = bpy.ops.export_scene.gltf.get_rna_type().properties
+        if 'export_animation_mode' in props:
+            gltf_kwargs['export_animation_mode'] = 'ACTIVE_ACTIONS'
+        bpy.ops.export_scene.gltf(**gltf_kwargs)
     elif fmt == 'fbx':
         bpy.ops.export_scene.fbx(
             filepath=filepath,
@@ -722,13 +840,28 @@ def render_poses_grid(output_image_path):
     bpy.context.scene.render.resolution_y = 600
 
     temp_frames = []
-    for f in [1, 25, 50, 75]:
+    for f in [10, 35, 65, 85]:
         bpy.context.scene.frame_set(f)
         temp_path = f"/tmp/rig_pose_f{f:03d}.png"
         bpy.context.scene.render.filepath = temp_path
         bpy.ops.render.render(write_still=True)
         temp_frames.append(temp_path)
 
+    # Attempt 1: ffmpeg hstack filter
+    ffmpeg_bin = "/opt/homebrew/bin/ffmpeg" if os.path.exists("/opt/homebrew/bin/ffmpeg") else "ffmpeg"
+    try:
+        inputs = []
+        for p in temp_frames:
+            inputs.extend(["-i", p])
+        filter_str = "".join([f"[{i}:v]" for i in range(len(temp_frames))]) + f"hstack=inputs={len(temp_frames)}[out]"
+        cmd = [ffmpeg_bin, "-y"] + inputs + ["-filter_complex", filter_str, "-map", "[out]", "-update", "1", output_image_path]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"[+] Contact sheet saved: {output_image_path}")
+        return
+    except Exception as e_ffmpeg:
+        pass
+
+    # Attempt 2: PIL
     try:
         from PIL import Image
         imgs = [Image.open(p) for p in temp_frames]
@@ -738,11 +871,15 @@ def render_poses_grid(output_image_path):
             grid.paste(img, (i * w, 0))
         grid.save(output_image_path)
         print(f"[+] Contact sheet saved: {output_image_path}")
-    except Exception as e:
-        import shutil
-        if temp_frames:
-            shutil.copy(temp_frames[0], output_image_path)
-            print(f"[+] Rendered single pose preview: {output_image_path}")
+        return
+    except Exception as e_pil:
+        pass
+
+    # Fallback: Single frame
+    import shutil
+    if temp_frames:
+        shutil.copy(temp_frames[0], output_image_path)
+        print(f"[+] Rendered single pose preview: {output_image_path}")
 
 
 def render_animation_video(output_mp4_path):
@@ -823,7 +960,7 @@ def main():
         if rig_config.get("type") == "planar_2d":
             apply_shadow_puppet_animation(arm_anim)
         else:
-            apply_humanoid_inspection_animation(arm_anim)
+            apply_humanoid_walk_to_run_animation(arm_anim)
 
         for fmt in formats:
             export_file(os.path.join(out_dir, f"{args.name}_animated.{fmt}"), fmt)

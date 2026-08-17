@@ -23,7 +23,7 @@ flowchart TD
     G & H & I & J --> K["Automatic Skinning (ARMATURE_AUTO)\nBone Weight Assignment"]
     
     K --> L["Pure Rigged Model Export\n(.usdz, .glb, .blend, .fbx)"]
-    K --> M["Performance Animation Engine\n(Shadow Routine / Humanoid Routine)"]
+    K --> M["Performance Animation Engine\n(Shadow Routine / Walk-to-Run Progression)"]
     
     M --> N["Animated Model Export\n(.usdz, .glb, .blend, .fbx)"]
     M --> O["Visual Previews\n(Grid Contact Sheet .png & MP4 Video)"]

@@ -16,7 +16,7 @@ It supports both **strict 2D planar rigs** (such as Chinese Shadow Play puppets 
   - Full 65-joint humanoid hierarchy compatible with Mixamo, SMPL, and standard game engines.
   - Complete 5-finger articulated hand chains (Thumb, Index, Middle, Ring, Pinky with 3 phalanges each = 30 hand bones).
   - Facial anchors (Eyes, Jaw), multi-segment spine (Spine, Spine1, Spine2, Chest), and articulated feet/toes.
-  - Included 100-frame 3D humanoid inspection routine (Rest Stance $\rightarrow$ A-Pose $\rightarrow$ Hand/Finger curl $\rightarrow$ Squat).
+  - Included 100-frame 3D humanoid Walk-to-Run progression routine (Ready Stance $\rightarrow$ Ground Walk Cycle $\rightarrow$ Jog Acceleration $\rightarrow$ Sprint Running $\rightarrow$ Controlled Ease).
 - **Preset 3: Streamlined Game Biped 24-Joint Rig (`biped-24`)**:
   - Efficient 24-joint game skeleton without individual finger bones (single hand and foot pivots).
 - **Custom Rig Configuration (`--custom-rig <path.json>`)**:
