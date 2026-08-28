@@ -17,7 +17,7 @@ import json
 import argparse
 import unicodedata
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 
 
 # ==============================================================================
@@ -106,6 +106,67 @@ def count_story_units(
 
     total_units = int(round(cjk_count * cjk_weight + word_count * word_weight))
     return total_units, cjk_count, word_count
+
+
+def build_prompt(
+    tag_type: str,
+    section_title: str,
+    before_text: str = "",
+    after_text: str = ""
+) -> str:
+    """
+    Build a context-aware prompt based on narrative text surrounding the media tag.
+
+    Priority Rules:
+    1. If tag is just under #title (start of section): only text after it exists -> text after is 1st priority.
+    2. If tag is in the middle of a section: text after it is 1st priority, text before is secondary.
+    3. If tag is after the last paragraph of a section: only text before it exists -> text before is 1st priority.
+    """
+    clean_before = strip_markdown_decorations(before_text).replace("\n", " ").strip()
+    clean_after = strip_markdown_decorations(after_text).replace("\n", " ").strip()
+    clean_section = strip_markdown_decorations(section_title).replace("\n", " ").strip()
+
+    # Determine primary vs secondary
+    if clean_after and not clean_before:
+        # Just under #title / start of section: only has paragraph after it (1st priority)
+        primary = clean_after
+        secondary = ""
+    elif clean_before and not clean_after:
+        # Last paragraph of the section: only text before it (1st priority)
+        primary = clean_before
+        secondary = ""
+    elif clean_after and clean_before:
+        # In the middle: text after is 1st priority, text before is secondary
+        primary = clean_after
+        secondary = clean_before
+    else:
+        primary = clean_section
+        secondary = ""
+
+    # Check if narrative is predominantly CJK or English
+    units, cjk_count, word_count = count_story_units(primary + " " + secondary)
+    is_cjk = cjk_count >= word_count
+
+    if is_cjk:
+        if tag_type == "video":
+            prompt = f"【{clean_section}】开篇视频画面：{primary}"
+            if secondary:
+                prompt += f"（背景脉络：{secondary}）"
+        else:
+            prompt = f"【{clean_section}】主要画面：{primary}"
+            if secondary:
+                prompt += f"（前情背景：{secondary}）"
+    else:
+        if tag_type == "video":
+            prompt = f"Video scene for '{clean_section}': {primary}"
+            if secondary:
+                prompt += f" (Context: {secondary})"
+        else:
+            prompt = f"[{clean_section}] Main scene: {primary}"
+            if secondary:
+                prompt += f" (Background context: {secondary})"
+
+    return prompt
 
 
 # ==============================================================================
@@ -299,6 +360,8 @@ def insert_media_tags(
     first_insert: bool = True,
     first_insert_pos: str = "after-first-paragraph",
     reset_on_h1: bool = False,
+    generate_prompts: bool = False,
+    clean_media: Optional[Union[str, List[str]]] = None,
     img_prefix: str = DEFAULT_IMG_PREFIX,
     vid_prefix: str = DEFAULT_VID_PREFIX,
     id_digits: int = DEFAULT_ID_DIGITS,
@@ -315,6 +378,8 @@ def insert_media_tags(
         first_insert: Whether to guarantee a first image insert for the opening.
         first_insert_pos: 'after-first-paragraph' or 'at-story-start'.
         reset_on_h1: Reset accumulated character counter on each Level 1 heading.
+        generate_prompts: Whether to auto-generate context-aware visual prompts for tags.
+        clean_media: Remove existing Markdown/HTML media (images/videos) before inserting tags.
         img_prefix: Prefix for image IDs (e.g. 'img_').
         vid_prefix: Prefix for video IDs (e.g. 'vid_').
         id_digits: Zero-padding width for IDs (e.g. 3 -> '001').
@@ -333,21 +398,48 @@ def insert_media_tags(
         elif t_low in ["video", "vid", "videos"]:
             types_set.add("video")
 
+    # If requested, clean existing markdown media (images/videos) first
+    if clean_media:
+        markdown_text = remove_markdown_media(markdown_text, media_types=clean_media)
+
     # If requested, clean existing storybook tags first
     if remove_existing:
         markdown_text = remove_media_tags(markdown_text)
 
     blocks = split_markdown_into_blocks(markdown_text)
 
+    # Group blocks into structural sections based on headings
+    class SectionData:
+        def __init__(self, heading: Optional[MarkdownBlock]):
+            self.heading = heading
+            self.blocks: List[MarkdownBlock] = []
+            self.narrative_paras: List[MarkdownBlock] = []
+
+    sections: List[SectionData] = []
+    current_sec = SectionData(None)
+    sections.append(current_sec)
+
+    for b in blocks:
+        if b.block_type in (MarkdownBlock.TYPE_H1, MarkdownBlock.TYPE_HEADING):
+            current_sec = SectionData(b)
+            sections.append(current_sec)
+        else:
+            current_sec.blocks.append(b)
+            if b.block_type == MarkdownBlock.TYPE_PARAGRAPH:
+                u, _, _ = count_story_units(b.raw_text)
+                if u > 0:
+                    current_sec.narrative_paras.append(b)
+
     output_lines: List[str] = []
     current_h1 = ""
     current_section = ""
     image_index = 1
     video_index = 1
+    h1_count = 0
     accumulated_units = 0
     first_image_inserted = False
 
-    def make_image_tag(idx: int, section: str, context_hint: str = "") -> str:
+    def make_image_tag(idx: int, section: str, prompt: str = "", context_hint: str = "") -> str:
         tag_id = f"{img_prefix}{idx:0{id_digits}d}"
         tag_data = {
             "type": "image",
@@ -355,13 +447,13 @@ def insert_media_tags(
             "index": idx,
             "section": section,
             "context_hint": context_hint[:60].replace("\n", " ").strip() if context_hint else "",
-            "prompt": "",
+            "prompt": prompt,
             "asset": "",
             "status": "pending"
         }
         return format_tag(tag_data, tag_format)
 
-    def make_video_tag(idx: int, title: str) -> str:
+    def make_video_tag(idx: int, title: str, prompt: str = "", context_hint: str = "") -> str:
         tag_id = f"{vid_prefix}{idx:0{id_digits}d}"
         tag_data = {
             "type": "video",
@@ -369,91 +461,94 @@ def insert_media_tags(
             "index": idx,
             "title": title,
             "section": title,
-            "prompt": "",
+            "context_hint": context_hint[:60].replace("\n", " ").strip() if context_hint else "",
+            "prompt": prompt,
             "asset": "",
             "status": "pending"
         }
         return format_tag(tag_data, tag_format)
 
-    # Process blocks
-    for block in blocks:
-        # 1. Frontmatter
-        if block.block_type == MarkdownBlock.TYPE_FRONTMATTER:
-            output_lines.append(block.raw_text)
-            continue
-
-        # 2. Level 1 Heading (# Title) -> Trigger for Video
-        if block.block_type == MarkdownBlock.TYPE_H1:
-            title_text = block.content.strip()
-            current_h1 = title_text
+    # Process sections
+    for sec in sections:
+        # 1. Process Section Heading
+        if sec.heading:
+            h_block = sec.heading
+            title_text = h_block.content.strip()
             current_section = title_text
-            output_lines.append(block.raw_text)
 
-            if reset_on_h1:
-                accumulated_units = 0
+            if h_block.block_type == MarkdownBlock.TYPE_H1:
+                h1_count += 1
+                current_h1 = title_text
+                output_lines.append(h_block.raw_text)
 
-            # Insert Video Tag right below Level 1 Heading
-            if "video" in types_set:
-                vid_tag_str = make_video_tag(video_index, title_text)
-                video_index += 1
-                if not block.raw_text.endswith("\n"):
-                    output_lines.append("\n")
-                output_lines.append(f"{vid_tag_str}\n\n")
+                if reset_on_h1:
+                    accumulated_units = 0
 
-            # Check if story-start first image should be placed right after title
-            if "image" in types_set and first_insert and not first_image_inserted and first_insert_pos == "at-story-start":
-                img_tag_str = make_image_tag(image_index, current_section, title_text)
-                image_index += 1
-                first_image_inserted = True
-                accumulated_units = 0
-                output_lines.append(f"{img_tag_str}\n\n")
+                # Video Tag: Always skip the first # Title (overall document title), insert for subsequent chapter titles
+                if h1_count > 1 and "video" in types_set:
+                    first_para_text = sec.narrative_paras[0].content if sec.narrative_paras else ""
+                    prompt_str = build_prompt("video", title_text, before_text="", after_text=first_para_text) if generate_prompts else ""
+                    vid_tag_str = make_video_tag(video_index, title_text, prompt=prompt_str, context_hint=first_para_text)
+                    video_index += 1
+                    if not h_block.raw_text.endswith("\n"):
+                        output_lines.append("\n")
+                    output_lines.append(f"{vid_tag_str}\n\n")
 
-            continue
+                # Story-start first image (if configured for at-story-start)
+                if "image" in types_set and first_insert and not first_image_inserted and first_insert_pos == "at-story-start":
+                    first_para_text = sec.narrative_paras[0].content if sec.narrative_paras else ""
+                    prompt_str = build_prompt("image", current_section, before_text="", after_text=first_para_text) if generate_prompts else ""
+                    img_tag_str = make_image_tag(image_index, current_section, prompt=prompt_str, context_hint=first_para_text)
+                    image_index += 1
+                    first_image_inserted = True
+                    accumulated_units = 0
+                    output_lines.append(f"{img_tag_str}\n\n")
+            else:
+                # Other heading (##, ###)
+                output_lines.append(h_block.raw_text)
 
-        # 3. Other Headings (##, ###)
-        if block.block_type == MarkdownBlock.TYPE_HEADING:
-            current_section = block.content.strip()
-            output_lines.append(block.raw_text)
-            continue
+        # 2. Process Section Blocks (paragraphs, blanks, code blocks, etc.)
+        for block in sec.blocks:
+            if block.block_type != MarkdownBlock.TYPE_PARAGRAPH:
+                output_lines.append(block.raw_text)
+                continue
 
-        # 4. Blank lines / Code blocks / Thematic breaks / Existing tags
-        if block.block_type in (MarkdownBlock.TYPE_BLANK, MarkdownBlock.TYPE_CODE_BLOCK, 
-                                MarkdownBlock.TYPE_THEMATIC_BREAK, MarkdownBlock.TYPE_EXISTING_TAG):
-            output_lines.append(block.raw_text)
-            continue
-
-        # 5. Narrative Content Paragraph
-        if block.block_type == MarkdownBlock.TYPE_PARAGRAPH:
             para_text = block.raw_text
             output_lines.append(para_text)
 
-            units, cjk_c, word_c = count_story_units(para_text)
+            units, _, _ = count_story_units(para_text)
             if units == 0:
                 continue
 
             if "image" in types_set:
-                # Handle First Insert (opening image after first paragraph)
+                # Find position of this paragraph in the section
+                k = sec.narrative_paras.index(block) if block in sec.narrative_paras else 0
+                is_last_in_section = (k == len(sec.narrative_paras) - 1)
+                before_text = block.content
+                after_text = sec.narrative_paras[k + 1].content if not is_last_in_section else ""
+
+                should_insert = False
                 if first_insert and not first_image_inserted and first_insert_pos == "after-first-paragraph":
-                    img_tag_str = make_image_tag(image_index, current_section, block.content)
-                    image_index += 1
+                    should_insert = True
                     first_image_inserted = True
                     accumulated_units = 0
+                else:
+                    accumulated_units += units
+                    if accumulated_units >= image_gap:
+                        should_insert = True
+                        accumulated_units = 0
+
+                if should_insert:
+                    prompt_str = build_prompt("image", current_section, before_text=before_text, after_text=after_text) if generate_prompts else ""
+                    context_hint_str = after_text if after_text else before_text
+                    img_tag_str = make_image_tag(image_index, current_section, prompt=prompt_str, context_hint=context_hint_str)
+                    image_index += 1
+
                     if not para_text.endswith("\n\n") and not para_text.endswith("\n"):
                         output_lines.append("\n\n")
                     elif para_text.endswith("\n") and not para_text.endswith("\n\n"):
                         output_lines.append("\n")
                     output_lines.append(f"{img_tag_str}\n\n")
-                else:
-                    accumulated_units += units
-                    if accumulated_units >= image_gap:
-                        img_tag_str = make_image_tag(image_index, current_section, block.content)
-                        image_index += 1
-                        accumulated_units = 0
-                        if not para_text.endswith("\n\n") and not para_text.endswith("\n"):
-                            output_lines.append("\n\n")
-                        elif para_text.endswith("\n") and not para_text.endswith("\n\n"):
-                            output_lines.append("\n")
-                        output_lines.append(f"{img_tag_str}\n\n")
 
     # Combine and clean up excess trailing blank lines
     result = "".join(output_lines)
@@ -557,6 +652,66 @@ def remove_media_tags(markdown_text: str) -> str:
     # Clean up double blank lines created by removal
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text
+
+
+def remove_markdown_media(
+    markdown_text: str,
+    media_types: Union[str, List[str]] = "all"
+) -> str:
+    """
+    Remove existing standard Markdown and HTML media elements (images and/or videos)
+    from the article, preserving storybook comment tags.
+
+    Args:
+        markdown_text: Input markdown text.
+        media_types: 'image', 'video', 'all', 'both', or list of types.
+
+    Returns:
+        Cleaned markdown text with existing Markdown/HTML media elements removed.
+    """
+    if isinstance(media_types, str):
+        types_list = [media_types]
+    else:
+        types_list = list(media_types)
+
+    types_set = set()
+    for t in types_list:
+        if not t:
+            continue
+        t_low = t.strip().lower()
+        if t_low in ["all", "both"]:
+            types_set.add("image")
+            types_set.add("video")
+        elif t_low in ["image", "img", "images"]:
+            types_set.add("image")
+        elif t_low in ["video", "vid", "videos"]:
+            types_set.add("video")
+
+    text = markdown_text
+
+    if "video" in types_set:
+        # Remove HTML video elements
+        text = re.sub(r'<video\b[^>]*>.*?</video>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<video\b[^>]*\/?>', '', text, flags=re.IGNORECASE)
+        # Remove video iframes / embeds
+        text = re.sub(r'<iframe\b[^>]*(youtube|vimeo|bilibili|video|player)[^>]*>.*?</iframe>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # Remove linked video thumbnails [![alt](img)](video_url)
+        text = re.sub(r'\[!\[.*?\]\([^\)]*\)\]\([^\)]*\)', '', text)
+
+    if "image" in types_set:
+        # Remove Markdown inline images: ![alt](url) and ![alt](url "title")
+        text = re.sub(r'!\[.*?\]\([^\)]*\)', '', text)
+        # Remove Markdown reference images: ![alt][ref]
+        text = re.sub(r'!\[.*?\]\[[^\]]*\]', '', text)
+        # Remove HTML img tags: <img ... />
+        text = re.sub(r'<img\b[^>]*\/?>', '', text, flags=re.IGNORECASE)
+        # Remove HTML picture tags: <picture>...</picture>
+        text = re.sub(r'<picture\b[^>]*>.*?</picture>', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Clean up leftover blank lines and whitespace
+    text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip() + "\n"
 
 
 def get_storybook_stats(markdown_text: str) -> Dict[str, Any]:
@@ -705,6 +860,26 @@ def parse_args():
         help="Tag formatting style: 'json-comment' (default), 'kv-comment', 'block-comment', 'visible'."
     )
     parser.add_argument(
+        "--generate-prompts", "--generate-prompt",
+        dest="generate_prompts",
+        action="store_true",
+        help="Auto-generate context-aware visual prompts based on narrative text surrounding each tag."
+    )
+    parser.add_argument(
+        "-c", "--clean-media", "--remove-md-media",
+        dest="clean_media",
+        nargs="?",
+        const="all",
+        choices=["image", "video", "all", "both"],
+        default=None,
+        help="Remove existing Markdown/HTML media elements (images and/or videos; default: all) from the article."
+    )
+    parser.add_argument(
+        "--clean-media-only",
+        action="store_true",
+        help="Only remove existing Markdown/HTML media elements from the article, without inserting new storybook tags."
+    )
+    parser.add_argument(
         "--extract-tags", "--list-tags",
         action="store_true",
         help="Extract and print all media tags found in the markdown file as JSON."
@@ -755,6 +930,22 @@ def main():
     if not input_text.strip():
         print("Error: Input content is empty.", file=sys.stderr)
         sys.exit(1)
+
+    # 0. Mode: Clean Existing Markdown Media Only
+    if args.clean_media_only:
+        clean_target = args.clean_media or "all"
+        cleaned_text = remove_markdown_media(input_text, media_types=clean_target)
+        if args.in_place and input_path and input_path != "-":
+            with open(input_path, "w", encoding="utf-8") as f:
+                f.write(cleaned_text)
+            print(f"Successfully cleaned markdown media in-place: {input_path}")
+        elif args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(cleaned_text)
+            print(f"Successfully wrote cleaned markdown to {args.output}")
+        else:
+            sys.stdout.write(cleaned_text)
+        sys.exit(0)
 
     # 1. Mode: Display Statistics
     if args.stats:
@@ -817,6 +1008,8 @@ def main():
         first_insert=args.first_insert,
         first_insert_pos=args.first_insert_pos,
         reset_on_h1=args.reset_on_h1,
+        generate_prompts=args.generate_prompts,
+        clean_media=args.clean_media,
         img_prefix=args.img_prefix,
         vid_prefix=args.vid_prefix,
         id_digits=args.id_digits,

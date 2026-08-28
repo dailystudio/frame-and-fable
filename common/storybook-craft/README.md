@@ -23,7 +23,14 @@ A powerful, precision Markdown processor for storybooks and illustrated narrativ
   - Supports positioning options: `after-first-paragraph` (default) or `at-story-start`.
 
 - **Heading 1 (`# Title`) Video Trigger**:
-  - Automatically detects first-level Markdown headings (`# Heading`) and places a structured video placeholder tag directly underneath.
+  - Automatically skips the document title (the first `# Title` in the file).
+  - Automatically places a structured video placeholder tag under subsequent chapter headings (`# Heading`).
+
+- **Context-Aware Prompt Generation (`--generate-prompts`)**:
+  - Automatically crafts rich visual generation prompts from the narrative surrounding each tag:
+    - **Under heading / start of section**: Paragraph after tag is 1st priority.
+    - **In the middle of a section**: Paragraph after tag is 1st priority (primary scene); paragraph before tag is secondary priority (background context).
+    - **End of section**: Paragraph before tag is 1st priority.
 
 - **Multi-Language Counting Engine**:
   - Accurately counts CJK ideographs & full-width typography (1 character = 1 unit).
@@ -48,12 +55,12 @@ A powerful, precision Markdown processor for storybooks and illustrated narrativ
 
 ### 1. Image Tag (`json-comment` default)
 ```markdown
-<!-- storybook-media: {"type": "image", "id": "img_001", "index": 1, "section": "Chapter 1", "context_hint": "Snippet of surrounding narrative...", "prompt": "", "asset": "", "status": "pending"} -->
+<!-- storybook-media: {"type": "image", "id": "img_001", "index": 1, "section": "Chapter 1", "context_hint": "Snippet of surrounding narrative...", "prompt": "【Chapter 1】主要画面：...（前情背景：...）", "asset": "", "status": "pending"} -->
 ```
 
 ### 2. Video Tag (`json-comment` default)
 ```markdown
-<!-- storybook-media: {"type": "video", "id": "vid_001", "index": 1, "title": "Chapter 1: The Beginning", "section": "Chapter 1: The Beginning", "prompt": "", "asset": "", "status": "pending"} -->
+<!-- storybook-media: {"type": "video", "id": "vid_001", "index": 1, "title": "Chapter 1: The Beginning", "section": "Chapter 1: The Beginning", "prompt": "【Chapter 1: The Beginning】开篇视频画面：...", "asset": "", "status": "pending"} -->
 ```
 
 ### Tag Fields
@@ -65,7 +72,7 @@ A powerful, precision Markdown processor for storybooks and illustrated narrativ
 | `index` | `integer` | 1-based sequential media index |
 | `section` / `title` | `string` | Title of the enclosing `# Title` section |
 | `context_hint` | `string` | Narrative snippet from the accompanying paragraph |
-| `prompt` | `string` | Placeholder for generated prompt / AI generation |
+| `prompt` | `string` | Auto-generated or custom prompt for AI generation |
 | `asset` | `string` | Placeholder for generated file path (e.g. `outputs/img_001.png`) |
 | `status` | `string` | Lifecycle status: `"pending"`, `"generated"`, etc. |
 
@@ -73,9 +80,9 @@ A powerful, precision Markdown processor for storybooks and illustrated narrativ
 
 ## Usage Examples
 
-### 1. Standard Tagging (Both Images and Videos)
+### 1. Standard Tagging with Context-Aware Prompt Generation
 ```bash
-python storybook_craft.py story.md -o story_crafted.md
+python storybook_craft.py story.md --generate-prompts -o story_crafted.md
 ```
 
 ### 2. Custom Image Gap (e.g., 150 Characters)
@@ -83,14 +90,14 @@ python storybook_craft.py story.md -o story_crafted.md
 python storybook_craft.py story.md -t image -g 150 -o story_images.md
 ```
 
-### 3. Video Tags Only (under `# Title` headings)
+### 3. Video Tags Only (under chapter `# Title` headings)
 ```bash
 python storybook_craft.py story.md -t video -o story_videos.md
 ```
 
 ### 4. In-Place File Update
 ```bash
-python storybook_craft.py story.md -w
+python storybook_craft.py story.md --generate-prompts -w
 ```
 
 ### 5. Extract Media Tags as JSON (for AI Generation Scripts)
@@ -109,7 +116,7 @@ python storybook_craft.py story_crafted.md --extract-tags
       "index": 1,
       "title": "魔法森林的秘密",
       "section": "魔法森林的秘密",
-      "prompt": "",
+      "prompt": "【魔法森林的秘密】开篇视频画面：很久很久以前，在群山环抱的一片古老森林里...",
       "asset": "",
       "status": "pending"
     },
@@ -118,8 +125,8 @@ python storybook_craft.py story_crafted.md --extract-tags
       "id": "img_001",
       "index": 1,
       "section": "魔法森林的秘密",
-      "context_hint": "很久很久以前，在群山环抱的一片古老森林里...",
-      "prompt": "",
+      "context_hint": "清晨的第一缕阳光穿透薄雾，将金色的光斑洒在潮湿的苔藓上...",
+      "prompt": "【魔法森林的秘密】主要画面：清晨的第一缕阳光穿透薄雾...（前情背景：很久很久以前，在群山环抱的一片古老森林里...）",
       "asset": "",
       "status": "pending"
     }
@@ -132,7 +139,12 @@ python storybook_craft.py story_crafted.md --extract-tags
 python storybook_craft.py story_crafted.md --stats
 ```
 
-### 7. Clean / Remove All Tags
+### 7. Clean Existing Markdown Media (-c) & Tag Story
+```bash
+python storybook_craft.py story.md -c --generate-prompts -o story_crafted.md
+```
+
+### 8. Clean / Remove All Storybook Tags
 ```bash
 python storybook_craft.py story_crafted.md --clean -o story_clean.md
 ```
@@ -148,10 +160,13 @@ python storybook_craft.py story_crafted.md --clean -o story_clean.md
 | `-o`, `--output` | `-o` | Target output file path | `stdout` |
 | `-w`, `--in-place` | `-w` | Overwrite input file in place | `False` |
 | `-t`, `--type` | `-t` | Media type: `image`, `video`, `all` | `all` |
+| `-c`, `--clean-media` | `-c` | Strip existing Markdown/HTML media (`image`, `video`, `all`) | `None` (`all` when passed) |
+| `--clean-media-only` | | Only strip existing Markdown/HTML media without inserting tags | `False` |
 | `-g`, `--gap`, `--image-gap` | `-g` | Interval in CJK chars / English words between images | `200` |
 | `--first-insert` / `--no-first-insert` | | Guarantee opening scene image on first paragraph | `True` |
 | `--first-insert-pos` | | First image position (`after-first-paragraph`, `at-story-start`) | `after-first-paragraph` |
 | `--reset-on-h1` | | Reset image character accumulation at each `# Title` | `False` |
+| `--generate-prompts` | | Auto-generate context-aware visual prompts for media tags | `False` |
 | `--img-prefix` | | Prefix for image IDs | `img_` |
 | `--vid-prefix` | | Prefix for video IDs | `vid_` |
 | `--id-digits` | | Zero padding width for IDs | `3` (`001`) |

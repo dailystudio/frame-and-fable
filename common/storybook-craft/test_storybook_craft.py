@@ -11,6 +11,7 @@ from storybook_craft import (
     insert_media_tags,
     extract_media_tags,
     remove_media_tags,
+    remove_markdown_media,
     get_storybook_stats,
     format_tag,
     MarkdownBlock
@@ -84,7 +85,9 @@ class TestTagInsertion(unittest.TestCase):
         self.p2 = "清晨的第一缕阳光穿透薄雾，将金色的光斑洒在潮湿的苔藓上。小明沿着一条熟悉的小溪缓缓向前走去，水流撞击着光滑的鹅卵石，发出悦耳的叮咚声。就在这时，小溪对岸的一道奇异蓝光吸引了他的注意，那是一团漂浮的光芒。"
         self.p3 = "小明小心翼翼地踩着溪流中的垫脚石跨过小溪。走近一看，那竟然是一只通体透明、散发着幽蓝荧光的小精灵。小精灵有着薄如蝉翼的翅膀，正悬停在一朵盛开的七彩野花上方，似乎在焦急地寻找着昨夜暴风雨中遗失的钥匙。"
         
-        self.story_md = f"""# 第一章 魔法森林
+        self.story_md = f"""# 魔法森林历险记
+
+# 第一章 魔法森林
 
 {self.p1}
 
@@ -99,11 +102,12 @@ class TestTagInsertion(unittest.TestCase):
 {self.p2}
 """
 
-    def test_video_tag_under_h1(self):
+    def test_video_tag_under_h1_and_skip_first_title(self):
         result = insert_media_tags(self.story_md, media_types=["video"])
         tags = extract_media_tags(result)
         
         video_tags = [t for t in tags if t.get("type") == "video"]
+        # The first # Title (魔法森林历险记) is skipped; chapters 1 and 2 get video tags
         self.assertEqual(len(video_tags), 2)
         self.assertEqual(video_tags[0]["id"], "vid_001")
         self.assertEqual(video_tags[0]["title"], "第一章 魔法森林")
@@ -144,6 +148,20 @@ class TestTagInsertion(unittest.TestCase):
         self.assertEqual(len(vids), 2)
         self.assertEqual(len(imgs), 3)
 
+    def test_generate_prompts(self):
+        result = insert_media_tags(self.story_md, media_types=["all"], image_gap=200, generate_prompts=True)
+        tags = extract_media_tags(result)
+        
+        # Check video prompt (under # Title -> only text after it is 1st priority)
+        vid_001 = [t for t in tags if t.get("id") == "vid_001"][0]
+        self.assertIn("第一章 魔法森林", vid_001["prompt"])
+        self.assertIn("很久很久以前", vid_001["prompt"])
+
+        # Check first image prompt (middle of section: after is 1st priority, before is secondary)
+        img_001 = [t for t in tags if t.get("id") == "img_001"][0]
+        self.assertIn("清晨的第一缕阳光", img_001["prompt"]) # Primary (after)
+        self.assertIn("很久很久以前", img_001["prompt"])     # Secondary (before)
+
     def test_clean_and_remove_tags(self):
         tagged = insert_media_tags(self.story_md, media_types=["all"], image_gap=200)
         cleaned = remove_media_tags(tagged)
@@ -171,9 +189,56 @@ class TestTagInsertion(unittest.TestCase):
         tags_vis = extract_media_tags(res_vis)
         self.assertGreater(len(tags_vis), 0)
 
+    def test_remove_markdown_media(self):
+        doc = """# 序章
+
+![Image](https://example.com/pic1.png)
+
+这是一段故事正文。
+
+<img src="https://example.com/pic2.jpg" alt="test" />
+
+<video src="https://example.com/vid.mp4"></video>
+
+这是另一段正文。
+"""
+        # Test cleaning all media (default)
+        cleaned_all = remove_markdown_media(doc, "all")
+        self.assertNotIn("https://example.com/pic1.png", cleaned_all)
+        self.assertNotIn("https://example.com/pic2.jpg", cleaned_all)
+        self.assertNotIn("https://example.com/vid.mp4", cleaned_all)
+        self.assertIn("这是一段故事正文。", cleaned_all)
+        self.assertIn("这是另一段正文。", cleaned_all)
+
+        # Test cleaning images only
+        cleaned_img = remove_markdown_media(doc, "image")
+        self.assertNotIn("pic1.png", cleaned_img)
+        self.assertNotIn("pic2.jpg", cleaned_img)
+        self.assertIn("<video", cleaned_img)
+
+        # Test cleaning videos only
+        cleaned_vid = remove_markdown_media(doc, "video")
+        self.assertIn("pic1.png", cleaned_vid)
+        self.assertNotIn("<video", cleaned_vid)
+
+    def test_clean_media_in_insert_tags(self):
+        doc_with_images = f"""# 魔法森林历险记
+
+# 第一章 魔法森林
+
+![Image](https://example.com/old_image.png)
+
+{self.p1}
+
+{self.p2}
+"""
+        result = insert_media_tags(doc_with_images, media_types=["all"], clean_media="all")
+        self.assertNotIn("https://example.com/old_image.png", result)
+        self.assertIn("<!-- storybook-media:", result)
+
     def test_stats(self):
         stats = get_storybook_stats(self.story_md)
-        self.assertEqual(stats["h1_headings"], 2)
+        self.assertEqual(stats["h1_headings"], 3)
         self.assertEqual(stats["paragraphs"], 5)
         self.assertGreater(stats["cjk_characters"], 500)
 
