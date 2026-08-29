@@ -26,10 +26,14 @@
 ### Installation
 
 ```bash
-# 1. Install Playwright Python package
-pip install playwright
+# 1. (Optional) Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# 2. Install Playwright Chromium browser
+# 2. Install dependencies from requirements.txt
+pip install -r requirements.txt
+
+# 3. Install Playwright Chromium browser
 playwright install chromium
 ```
 
