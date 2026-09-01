@@ -88,6 +88,44 @@ A comprehensive Python CLI tool for generating and editing images using the Goog
 .venv/bin/python gemini-image.py "Update this infographic to be in Spanish" --previous-id int_xyz123 -r 16:9 -s 2K -o spanish.png
 ```
 
+### 5. Multi-View Generation Presets
+Generate multi-view images from a front reference image (1:1 ratio, 4K resolution):
+
+#### Model Multi-Views (`model-multiviews.sh`)
+```bash
+# Basic usage (defaults to Left, Right, and Back views)
+./presets/model-multiviews.sh character_front.png
+
+# With extra prompt
+./presets/model-multiviews.sh character_front.png "keep white background, clay style"
+
+# With custom view angles (-v / --views)
+./presets/model-multiviews.sh character_front.png -v "left; top; bottom"
+
+# With transparent background or other options
+./presets/model-multiviews.sh -i character_front.png -p "3D render" --transparent
+```
+
+#### T-POSE Multi-Views Wrapper (`t-pose-multiviews.sh`)
+Wraps `model-multiviews.sh` and automatically includes `"T-POSE"` in the prompt:
+```bash
+# Basic usage (generates Left, Right, and Back views in T-POSE)
+./presets/t-pose-multiviews.sh character_front.png
+
+# With extra styling prompt (combined as "T-POSE, keep white background")
+./presets/t-pose-multiviews.sh character_front.png "keep white background, clay style"
+```
+
+#### Garment Multi-Views Wrapper (`garment-multiviews.sh`)
+Wraps `model-multiviews.sh` tailored for garments/clothing, generating Left, Top, and Bottom views and prompting the model to account for hollow parts:
+```bash
+# Basic usage (generates Left, Top, Bottom views with hollow parts instruction)
+./presets/garment-multiviews.sh shirt_front.png
+
+# With extra styling prompt
+./presets/garment-multiviews.sh jacket_front.png "denim fabric, realistic folds"
+```
+
 ---
 
 ## Command Line Options
