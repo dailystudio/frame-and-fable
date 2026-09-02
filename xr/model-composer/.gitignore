@@ -1,0 +1,7 @@
+# Project specified files
+outputs
+tests
+.venv/
+__pycache__/
+*.pyc
+.idea/

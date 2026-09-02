@@ -1,0 +1,7 @@
+# Core dependencies for model-composer host CLI & image comparisons
+Pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Note: 'bpy' and 'pxr' (Pixar USD) are included natively within the Blender 4.0+ executable.
+# Ensure Blender 4.0+ is installed on the host system.
