@@ -35,6 +35,8 @@ Options:
   -i, --image IMAGE_PATH        Path to front reference image
   -p, --extra-prompt PROMPT     Additional prompt to append (e.g. "clay style")
   -v, --views VIEWS             Override views (default: "left; top; bottom")
+  -r, -a, --ratio RATIO         Aspect ratio for generated views (default: 1:1)
+  -s, --size SIZE               Resolution for generated views (default: 4K)
   -h, --help                    Show this help message
   ...                           Any other flags are forwarded to gemini-image.py
                                 (e.g. --transparent, -m 3.1-flash, -o outputs/)
@@ -43,6 +45,7 @@ Examples:
   $(basename "$0") shirt_front.png
   $(basename "$0") jacket_front.png "denim fabric, realistic folds"
   $(basename "$0") -i dress_front.png -p "3D render" --transparent
+  $(basename "$0") -i shirt.png -r 16:9 -s 2K
 EOF
 }
 
@@ -66,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             REF_IMAGE="$2"
             shift 2
             ;;
+        --image=*)
+            REF_IMAGE="${1#*=}"
+            shift
+            ;;
         -v|--views)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires a views string." >&2
@@ -74,6 +81,10 @@ while [[ $# -gt 0 ]]; do
             VIEWS="$2"
             shift 2
             ;;
+        --views=*)
+            VIEWS="${1#*=}"
+            shift
+            ;;
         -p|--prompt|--extra-prompt)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires a prompt string." >&2
@@ -81,6 +92,68 @@ while [[ $# -gt 0 ]]; do
             fi
             EXTRA_PROMPT="$2"
             shift 2
+            ;;
+        --prompt=*|--extra-prompt=*)
+            EXTRA_PROMPT="${1#*=}"
+            shift
+            ;;
+        -r|-a|--ratio|--aspect-ratio)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an aspect ratio." >&2
+                exit 1
+            fi
+            EXTRA_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -r=*|-a=*|--ratio=*|--aspect-ratio=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        -s|--size|--resolution)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a size/resolution." >&2
+                exit 1
+            fi
+            EXTRA_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -s=*|--size=*|--resolution=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        -m|--model|-o|--output|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an argument." >&2
+                exit 1
+            fi
+            EXTRA_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -m=*|--model=*|-o=*|--output=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --transparent-background|--transparent|--search|--grounding|--image-search|--list-models|--list-ratios|--verbose)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --*=*|-*=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                if [[ -z "${REF_IMAGE}" ]]; then
+                    REF_IMAGE="$1"
+                elif [[ -z "${EXTRA_PROMPT}" ]]; then
+                    EXTRA_PROMPT="$1"
+                else
+                    EXTRA_ARGS+=("$1")
+                fi
+                shift
+            done
+            break
             ;;
         *)
             if [[ -z "${REF_IMAGE}" && ! "$1" =~ ^- ]]; then
@@ -115,7 +188,7 @@ fi
 
 # Invoke model-multiviews.sh
 exec "${MULTIVIEW_SCRIPT}" \
-    "${REF_IMAGE}" \
-    "${COMBINED_PROMPT}" \
-    --views "${VIEWS}" \
+    -i "${REF_IMAGE}" \
+    -p "${COMBINED_PROMPT}" \
+    -v "${VIEWS}" \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}

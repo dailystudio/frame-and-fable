@@ -46,6 +46,8 @@ Options:
   -v, --views VIEWS             Semicolon- or comma-separated list of views to generate
                                 (e.g. "left; top; bottom" or "front, back, left, right")
                                 Default: "left; right; back"
+  -r, -a, --ratio RATIO         Aspect ratio for generated views (default: 1:1)
+  -s, --size SIZE               Resolution for generated views (default: 4K)
   -h, --help                    Show this help message
   ...                           Any other flags are forwarded to gemini-image.py
                                 (e.g. --transparent, -m 3.1-flash, -o outputs/)
@@ -55,6 +57,7 @@ Examples:
   $(basename "$0") character_front.png "keep white background, clay style"
   $(basename "$0") garment.png -v "left; top; bottom" -p "account for hollow parts of the model"
   $(basename "$0") -i character_front.png -p "3D render, clay style" --transparent
+  $(basename "$0") -i character_front.png -r 16:9 -s 2K
 EOF
 }
 
@@ -68,6 +71,8 @@ trim() {
 REF_IMAGE=""
 EXTRA_PROMPT=""
 CUSTOM_VIEWS_RAW=""
+ASPECT_RATIO="1:1"
+IMAGE_SIZE="4K"
 EXTRA_ARGS=()
 
 # Parse command-line arguments
@@ -85,6 +90,10 @@ while [[ $# -gt 0 ]]; do
             REF_IMAGE="$2"
             shift 2
             ;;
+        --image=*)
+            REF_IMAGE="${1#*=}"
+            shift
+            ;;
         -p|--prompt|--extra-prompt)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires a prompt string." >&2
@@ -93,6 +102,10 @@ while [[ $# -gt 0 ]]; do
             EXTRA_PROMPT="$2"
             shift 2
             ;;
+        --prompt=*|--extra-prompt=*)
+            EXTRA_PROMPT="${1#*=}"
+            shift
+            ;;
         -v|--views)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires a views string." >&2
@@ -100,6 +113,68 @@ while [[ $# -gt 0 ]]; do
             fi
             CUSTOM_VIEWS_RAW="$2"
             shift 2
+            ;;
+        --views=*)
+            CUSTOM_VIEWS_RAW="${1#*=}"
+            shift
+            ;;
+        -r|-a|--ratio|--aspect-ratio)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an aspect ratio." >&2
+                exit 1
+            fi
+            ASPECT_RATIO="$2"
+            shift 2
+            ;;
+        -r=*|-a=*|--ratio=*|--aspect-ratio=*)
+            ASPECT_RATIO="${1#*=}"
+            shift
+            ;;
+        -s|--size|--resolution)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a size/resolution." >&2
+                exit 1
+            fi
+            IMAGE_SIZE="$2"
+            shift 2
+            ;;
+        -s=*|--size=*|--resolution=*)
+            IMAGE_SIZE="${1#*=}"
+            shift
+            ;;
+        -m|--model|-o|--output|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an argument." >&2
+                exit 1
+            fi
+            EXTRA_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -m=*|--model=*|-o=*|--output=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --transparent-background|--transparent|--search|--grounding|--image-search|--list-models|--list-ratios|--verbose)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --*=*|-*=*)
+            EXTRA_ARGS+=("$1")
+            shift
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                if [[ -z "${REF_IMAGE}" ]]; then
+                    REF_IMAGE="$1"
+                elif [[ -z "${EXTRA_PROMPT}" ]]; then
+                    EXTRA_PROMPT="$1"
+                else
+                    EXTRA_ARGS+=("$1")
+                fi
+                shift
+            done
+            break
             ;;
         *)
             if [[ -z "${REF_IMAGE}" && ! "$1" =~ ^- ]]; then
@@ -193,8 +268,8 @@ if [[ -n "${EXTRA_PROMPT}" ]]; then
     echo " Extra Prompt    : ${EXTRA_PROMPT}"
 fi
 echo " Total Views     : ${#VIEWS[@]}"
-echo " Aspect Ratio    : 1:1"
-echo " Resolution      : 4K"
+echo " Aspect Ratio    : ${ASPECT_RATIO}"
+echo " Resolution      : ${IMAGE_SIZE}"
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     echo " Extra Options   : ${EXTRA_ARGS[*]}"
 fi
@@ -216,8 +291,8 @@ for ITEM in "${VIEWS[@]}"; do
     "${PYTHON_BIN}" "${GEMINI_SCRIPT}" \
         "${PROMPT}" \
         -i "${REF_IMAGE}" \
-        -r 1:1 \
-        -s 4K \
+        -r "${ASPECT_RATIO}" \
+        -s "${IMAGE_SIZE}" \
         ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
     echo ""
