@@ -4,10 +4,15 @@ storybook.py: Modern story content craft and visual media pipeline.
 
 Commands:
   python storybook.py create "<prompt>"      Create story content from prompt (placeholder for future release)
-  python storybook.py media <file>          End-to-end media pipeline: tag -> prompt -> generate
+  python storybook.py media <file>          End-to-end media pipeline: tag -> prompt -> assets -> generate
   python storybook.py media tag <file>      Insert structured image and video tags into Markdown
   python storybook.py media prompt <file>   Generate/enrich visual prompts from narrative context
-  python storybook.py media generate <file> Generate AI media assets (images/videos) and link in Markdown
+  python storybook.py media generate <file> Generate AI media assets (images/videos) in workspace
+  python storybook.py assets <file>         Scaffold workspace and extract character/style metadata (no image generation)
+  python storybook.py assets <file> -g      Scaffold workspace and generate AI reference images
+  python storybook.py assets collect [file] Discover ref_xxx.png images and sync character/style JSON files
+  python storybook.py char-ref <file>       Manage character reference assets (auto-extract or import)
+  python storybook.py style-ref <file>      Manage style reference assets (auto-extract or import)
   python storybook.py test                  Run built-in test suite
 """
 
@@ -15,6 +20,7 @@ import sys
 import os
 import re
 import json
+import shutil
 import argparse
 import unicodedata
 import unittest
@@ -23,6 +29,16 @@ import mimetypes
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
+
+# Ensure Homebrew / system site-packages are available for google-genai on macOS
+for _sp in [
+    "/opt/homebrew/lib/python3.14/site-packages",
+    "/opt/homebrew/lib/python3.13/site-packages",
+    "/opt/homebrew/lib/python3.12/site-packages",
+    "/usr/local/lib/python3.14/site-packages",
+]:
+    if Path(_sp).exists() and _sp not in sys.path:
+        sys.path.append(_sp)
 
 
 # ==============================================================================
@@ -809,6 +825,1091 @@ def find_gemini_image_script() -> Optional[Path]:
     return None
 
 
+# ==============================================================================
+# Workspace & Reference Asset Management
+# ==============================================================================
+
+class StoryWorkspace:
+    """
+    Manages an isolated workspace for a storybook markdown file.
+    Structure:
+      <base_output_dir>/<stem>/
+        ├── <stem>-output.md
+        ├── images/
+        ├── videos/
+        ├── char-ref/
+        │   ├── <CharacterA>/
+        │   │   ├── ref_001.png
+        │   │   └── character.json
+        │   └── characters.json
+        └── style-ref/
+            ├── ref_001.png
+            └── style.json
+    """
+    def __init__(
+        self,
+        input_file: Optional[Union[str, Path]] = None,
+        base_output_dir: Union[str, Path] = "outputs"
+    ):
+        if input_file and str(input_file) != "-":
+            p = Path(input_file)
+            self.input_file: Optional[Path] = p
+            self.stem = p.stem
+        else:
+            self.input_file = None
+            self.stem = "story"
+
+        base = Path(base_output_dir)
+        # Avoid creating nested abc/abc if base already ends with stem
+        if base.name == self.stem:
+            self.workspace_dir = base
+        else:
+            self.workspace_dir = base / self.stem
+
+        self.images_dir = self.workspace_dir / "images"
+        self.videos_dir = self.workspace_dir / "videos"
+        self.char_ref_dir = self.workspace_dir / "char-ref"
+        self.style_ref_dir = self.workspace_dir / "style-ref"
+        self.output_md = self.workspace_dir / f"{self.stem}-output.md"
+
+    def ensure_dirs(self):
+        """Ensure all required workspace directories exist."""
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+        self.videos_dir.mkdir(parents=True, exist_ok=True)
+        self.char_ref_dir.mkdir(parents=True, exist_ok=True)
+        self.style_ref_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_char_dir(self, char_name: str, create: bool = True) -> Path:
+        """Return and optionally create dedicated reference subdirectory for a character."""
+        clean = re.sub(r'[\\/*?:"<>|]', '', str(char_name)).strip() or "character"
+        cdir = self.char_ref_dir / clean
+        if create:
+            cdir.mkdir(parents=True, exist_ok=True)
+        return cdir
+
+    def get_relative_asset_path(self, asset_path: Union[str, Path]) -> str:
+        """Calculate path relative to workspace root (e.g. images/img_001.png)."""
+        p = Path(asset_path).resolve()
+        try:
+            return str(p.relative_to(self.workspace_dir.resolve()))
+        except ValueError:
+            return str(p)
+
+
+def parse_char_refs_arg(char_refs_inputs: Optional[Union[List[str], str]]) -> Dict[str, List[str]]:
+    """
+    Parse character reference arguments into a mapping: {CharacterName: [image_path_1, ...]}.
+    Supports formats:
+      --char-refs A:XX.png, A:YY.png, B:ZZ.png
+      --char-refs A:XX.png --char-refs B:ZZ.png
+      --char-refs "A:XX.png, B:ZZ.png"
+    """
+    if not char_refs_inputs:
+        return {}
+    if isinstance(char_refs_inputs, str):
+        char_refs_inputs = [char_refs_inputs]
+
+    mapping: Dict[str, List[str]] = {}
+    for raw in char_refs_inputs:
+        if not raw:
+            continue
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        for part in parts:
+            tokens = part.split()
+            sub_parts = tokens if (len(tokens) > 1 and all(":" in tok for tok in tokens)) else [part]
+            for sp in sub_parts:
+                if ":" in sp:
+                    name, img_path = sp.split(":", 1)
+                    name = name.strip()
+                    img_path = img_path.strip().strip("'\"")
+                    if name and img_path:
+                        mapping.setdefault(name, []).append(img_path)
+    return mapping
+
+
+def parse_style_refs_arg(style_refs_inputs: Optional[Union[List[str], str]]) -> List[str]:
+    """
+    Parse style reference arguments into a list of image paths.
+    Supports formats:
+      --style-ref XX.png, YY.png, ZZ.png
+      --style-ref XX.png --style-ref YY.png
+    """
+    if not style_refs_inputs:
+        return []
+    if isinstance(style_refs_inputs, str):
+        style_refs_inputs = [style_refs_inputs]
+
+    refs: List[str] = []
+    for raw in style_refs_inputs:
+        if not raw:
+            continue
+        parts = [p.strip().strip("'\"") for p in raw.split(",") if p.strip()]
+        for part in parts:
+            for sp in part.split():
+                clean_p = sp.strip().strip("'\"")
+                if clean_p and clean_p not in refs:
+                    refs.append(clean_p)
+    return refs
+
+
+def extract_characters_from_story(
+    markdown_text: str,
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Automatically extract character information (names, visual DNA, portrait generation prompts)
+    from story markdown text.
+    Uses Gemini API if available, with intelligent heuristic fallback.
+    """
+    resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    client = None
+    if resolved_key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=resolved_key)
+        except Exception:
+            client = None
+
+    clean_text = strip_markdown_decorations(markdown_text)
+    sample_text = clean_text[:4000]
+
+    # 1. Try Gemini API extraction
+    if client:
+        try:
+            prompt = (
+                "You are an expert storybook art director. Analyze the story below and identify the main characters (1 to 4 characters).\n"
+                "For each character, output:\n"
+                "- 'name': character's name (e.g. '布洛克·铁盾' or 'Nora')\n"
+                "- 'role': their role or title in the story (e.g. 'Guardian Warrior' or 'Space Explorer')\n"
+                "- 'visual_dna': detailed physical visual appearance (age, species/ethnicity, hair, eyes, facial features, clothing/armor, distinct marks). Describe ONLY their physical look on a plain background, without background scenes or actions.\n"
+                "- 'portrait_prompt': prompt to generate a solo character concept art portrait on a clean neutral white or light gray background, studio lighting, highly detailed concept art sheet.\n\n"
+                "Story text:\n"
+                f"{sample_text}\n\n"
+                "Return strictly valid JSON with key 'characters': [ { ... } ]"
+            )
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            raw_content = getattr(resp, "text", "")
+            match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                chars = data.get("characters", [])
+                if chars:
+                    return chars
+        except Exception:
+            pass
+
+    # 2. Heuristic fallback extractor
+    extracted: List[Dict[str, Any]] = []
+    seen_names = set()
+    no_comment_text = re.sub(r'<!--.*?-->', '', markdown_text, flags=re.DOTALL)
+
+    # Pattern A: Bold character intros: **“磐石”——布洛克·铁盾（Brock Ironshield）** or **阿尔文·蓝焰**
+    bold_matches = re.findall(r'\*\*(?:[“"”\']?[^”"\'—–\-\n]+[”"\'—–\-]*)?([^\*\n]{2,25})\*\*', no_comment_text)
+    for b in bold_matches:
+        b_clean = b.strip()
+        if "——" in b_clean:
+            b_clean = b_clean.split("——")[-1].strip()
+        name_only = re.sub(r'[\(（].*?[\)）]', '', b_clean).strip('“"”\' ')
+        if len(name_only) in range(2, 12) and name_only not in seen_names:
+            if not name_only.startswith("的") and not any(p in name_only for p in ["。", "，", "！", "？", "、", "；", "：", ".", ",", "\"", "'"]):
+                if not any(stop in name_only for stop in ["前代文明", "古代遗产", "飞行器", "这片大陆", "然而", "但是", "虚空崩塌", "共鸣", "碎片", "脉络", "部分", "衡器", "怪"]):
+                    seen_names.add(name_only)
+                    role = "Main Character"
+                    visual_dna = f"Story protagonist '{name_only}', iconic costume and features, neutral studio lighting, isolated portrait."
+                    portrait_prompt = f"Character concept portrait of {name_only}, neutral background, studio lighting, highly detailed storybook concept art"
+                    extracted.append({
+                        "name": name_only,
+                        "role": role,
+                        "visual_dna": visual_dna,
+                        "portrait_prompt": portrait_prompt
+                    })
+
+    # Pattern B: Chinese naming: 名叫([^\s，。]+)
+    for m in re.findall(r'名叫([^\s，。]{2,12})', no_comment_text):
+        m_clean = m.strip()
+        if "的" in m_clean:
+            m_clean = m_clean.split("的")[0].strip()
+        if len(m_clean) in range(2, 10) and m_clean not in seen_names:
+            seen_names.add(m_clean)
+            extracted.append({
+                "name": m_clean,
+                "role": "Adventurer",
+                "visual_dna": f"Spirited young adventurer {m_clean}, curious expression, travel clothes, clean neutral background.",
+                "portrait_prompt": f"Character concept portrait of {m_clean}, young adventurer, expressive face, neutral gray background, storybook character design"
+            })
+
+    # Pattern C: Check for magical companion / creatures (e.g. 小精灵)
+    if "小精灵" in no_comment_text and "小精灵" not in seen_names:
+        seen_names.add("小精灵")
+        extracted.append({
+            "name": "小精灵",
+            "role": "Forest Spirit",
+            "visual_dna": "Tiny translucent glowing forest fairy, delicate wings, luminous blue particle aura, friendly expression.",
+            "portrait_prompt": "Concept art of a glowing miniature translucent forest fairy, delicate ethereal wings, luminous blue light, clean isolated background"
+        })
+
+    # Pattern D: English pilot / named ([A-Z][a-z]+)
+    for m in re.findall(r'(?:named|pilot|hero)\s+([A-Z][a-z]+)', no_comment_text):
+        if m not in seen_names and len(m) > 2:
+            seen_names.add(m)
+            extracted.append({
+                "name": m,
+                "role": "Explorer",
+                "visual_dna": f"Adventurous explorer {m}, distinctive uniform, determined expression, isolated character sheet.",
+                "portrait_prompt": f"Character design concept portrait of {m}, sci-fi / fantasy explorer, highly detailed, neutral gray background"
+            })
+
+    if not extracted:
+        extracted.append({
+            "name": "Protagonist",
+            "role": "Story Protagonist",
+            "visual_dna": "Heroic story protagonist with expressive features, iconic storybook travel attire, clean neutral studio lighting.",
+            "portrait_prompt": "Storybook protagonist character concept sheet, isolated on neutral background, highly detailed 8k portrait"
+        })
+
+    return extracted[:4]
+
+
+def extract_style_from_story(
+    markdown_text: str,
+    api_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Automatically extract the visual art style and reference prompts from story markdown text.
+    Uses Gemini API if available, with intelligent heuristic fallback.
+    """
+    resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    client = None
+    if resolved_key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=resolved_key)
+        except Exception:
+            client = None
+
+    clean_text = strip_markdown_decorations(markdown_text)
+    sample_text = clean_text[:4000]
+
+    if client:
+        try:
+            prompt = (
+                "You are an expert storybook art director. Analyze the story below and determine the optimal visual illustration art style.\n"
+                "Return strictly valid JSON with:\n"
+                "- 'style_name': short style name (e.g. 'Warm Watercolor Storybook' or 'Epic Fantasy Digital Art')\n"
+                "- 'style_prompt': detailed description of the art medium, brushwork, lighting, color palette, rendering quality (e.g. 'whimsical watercolor illustration, textured paper, warm pastel palette, soft volumetric lighting')\n"
+                "- 'reference_prompt': a prompt to generate a scenery or landscape image demonstrating this exact art style without any characters.\n\n"
+                "Story text:\n"
+                f"{sample_text}\n"
+            )
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            raw_content = getattr(resp, "text", "")
+            match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                if data.get("style_prompt"):
+                    return data
+        except Exception:
+            pass
+
+    # Heuristic fallback
+    text_lower = markdown_text.lower()
+    if any(k in text_lower or k in markdown_text for k in ["galaxy", "space", "pilot", "obelisk", "cosmic", "stars", "nebula"]):
+        return {
+            "style_name": "Cinematic Sci-Fi Digital Art",
+            "style_prompt": "Cinematic sci-fi digital concept art, celestial lighting, glowing nebula hues, deep space atmosphere, painterly matte finish, highly detailed 8k",
+            "reference_prompt": "A majestic glowing crystalline obelisk standing on a silent lunar crater, cosmic starry sky and emerald nebula in background, cinematic matte painting, scenic environment, no humans"
+        }
+    elif any(k in markdown_text for k in ["中世纪", "大陆", "城堡", "史前", "神殿", "战士", "法师", "巨盾", "战锤"]):
+        return {
+            "style_name": "Epic Fantasy Storybook Illustration",
+            "style_prompt": "Epic medieval fantasy storybook illustration, rich textured brushstrokes, warm golden amber lighting, deep atmospheric depth, painterly storybook fantasy art",
+            "reference_prompt": "Misty medieval rolling hills with distant castle spires and a winding silver river under golden sunrise, fantasy landscape, master painterly art style, scenic environment, no people"
+        }
+    else:
+        return {
+            "style_name": "Whimsical Watercolor Storybook",
+            "style_prompt": "Whimsical hand-drawn watercolor storybook illustration, soft warm pastel palette, gentle wash textures, dappled natural light, enchanting fairy tale atmosphere",
+            "reference_prompt": "An enchanted sunlit ancient forest with mossy stones, blooming wildflower meadow and a babbling crystal stream, whimsical watercolor art, no people"
+        }
+
+
+def natural_sort_key(s: str) -> List[Union[int, str]]:
+    """Sort strings containing numbers in natural/human order (e.g. ref_1, ref_2, ref_10)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+
+def find_reference_images(directory: Union[str, Path]) -> List[str]:
+    """
+    Find reference images in directory.
+    Prioritizes files matching ref_*.png (.jpg/.jpeg/.webp), followed by other images.
+    Returns naturally sorted list of filenames.
+    """
+    p = Path(directory)
+    if not p.exists() or not p.is_dir():
+        return []
+
+    valid_exts = {".png", ".jpg", ".jpeg", ".webp"}
+    ref_files = []
+    other_files = []
+
+    for f in p.iterdir():
+        if f.is_file() and f.suffix.lower() in valid_exts:
+            if f.name.lower().startswith("ref_"):
+                ref_files.append(f.name)
+            else:
+                other_files.append(f.name)
+
+    ref_files.sort(key=natural_sort_key)
+    other_files.sort(key=natural_sort_key)
+    return ref_files + other_files
+
+
+def setup_workspace_assets(
+    workspace: StoryWorkspace,
+    markdown_text: str,
+    char_refs_arg: Optional[Dict[str, List[str]]] = None,
+    style_refs_arg: Optional[List[str]] = None,
+    style_prompt: Optional[str] = None,
+    image_model: str = "gemini-3.1-flash-image",
+    api_key: Optional[str] = None,
+    generate_images: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    Sets up character references (outputs/<stem>/char-ref/<char>/) and
+    style references (outputs/<stem>/style-ref/).
+    - Default behavior: scaffolds folders and extracts JSON metadata without generating images.
+    - If generate_images=True: invokes AI model to generate reference images (ref_001.png).
+    - If user provides references via CLI, imports and copies them.
+    """
+    if not dry_run:
+        workspace.ensure_dirs()
+    report: Dict[str, Any] = {
+        "characters": [],
+        "styles": []
+    }
+
+    if verbose:
+        print(f"[storybook assets] Workspace directory: {workspace.workspace_dir}")
+        print(f"  - Images directory    : {workspace.images_dir}")
+        print(f"  - Videos directory    : {workspace.videos_dir}")
+        print(f"  - Character references: {workspace.char_ref_dir}")
+        print(f"  - Style references    : {workspace.style_ref_dir}")
+
+    resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    gemini_script = find_gemini_image_script()
+
+    # --------------------------------------------------------------------------
+    # 1. Character References Setup
+    # --------------------------------------------------------------------------
+    if char_refs_arg:
+        if verbose:
+            print(f"[storybook assets] Processing {len(char_refs_arg)} user-specified character(s)...")
+        for char_name, img_paths in char_refs_arg.items():
+            cdir = workspace.get_char_dir(char_name, create=not dry_run)
+            saved_images = []
+            for src_path_str in img_paths:
+                src_path = Path(src_path_str)
+                dest_file = cdir / src_path.name
+                if src_path.exists():
+                    if not dry_run:
+                        shutil.copy2(src_path, dest_file)
+                    saved_images.append(dest_file.name)
+                    if verbose:
+                        print(f"  -> Imported character reference for '{char_name}': {src_path} -> {dest_file}")
+                else:
+                    print(f"  Warning: Character reference image '{src_path}' not found.", file=sys.stderr)
+                    saved_images.append(src_path.name)
+
+            # Discover any other images already in cdir
+            if not dry_run and cdir.exists():
+                disk_imgs = find_reference_images(cdir)
+                for di in disk_imgs:
+                    if di not in saved_images:
+                        saved_images.append(di)
+
+            char_info = {
+                "name": char_name,
+                "role": "User Specified",
+                "visual_dna": f"Character {char_name}",
+                "images": saved_images,
+                "source": "user_provided"
+            }
+            if not dry_run:
+                with open(cdir / "character.json", "w", encoding="utf-8") as f:
+                    json.dump(char_info, f, ensure_ascii=False, indent=2)
+            report["characters"].append(char_info)
+    else:
+        existing_char_dirs = [d for d in workspace.char_ref_dir.iterdir() if d.is_dir()] if workspace.char_ref_dir.exists() else []
+        if existing_char_dirs and not force:
+            if verbose:
+                print(f"[storybook assets] Reusing existing {len(existing_char_dirs)} character reference directory(ies).")
+            for cdir in existing_char_dirs:
+                cinfo_path = cdir / "character.json"
+                c_info: Dict[str, Any] = {}
+                if cinfo_path.exists():
+                    try:
+                        with open(cinfo_path, "r", encoding="utf-8") as f:
+                            c_info = json.load(f)
+                    except Exception:
+                        pass
+                if not c_info:
+                    c_info = {
+                        "name": cdir.name,
+                        "role": "Character",
+                        "visual_dna": f"Character {cdir.name}",
+                        "portrait_prompt": f"Portrait of {cdir.name}",
+                        "source": "auto_extracted"
+                    }
+                disk_imgs = find_reference_images(cdir)
+
+                if generate_images and not disk_imgs:
+                    ref_img_path = cdir / "ref_001.png"
+                    if dry_run:
+                        if verbose:
+                            print(f"  [DRY RUN] Would generate reference portrait for '{cdir.name}' -> {ref_img_path}")
+                        disk_imgs.append("ref_001.png")
+                    else:
+                        gen_prompt = f"{c_info.get('portrait_prompt', '')}. Isolated character concept art, clean plain neutral background, centered studio portrait."
+                        if verbose:
+                            print(f"  Generating portrait reference for '{cdir.name}' -> {ref_img_path}...")
+                        success = False
+                        if gemini_script and gemini_script.exists():
+                            cmd = [
+                                sys.executable, str(gemini_script),
+                                gen_prompt,
+                                "-o", str(ref_img_path),
+                                "-m", image_model,
+                                "-r", "1:1",
+                                "-s", "1K"
+                            ]
+                            if resolved_key:
+                                cmd.extend(["--api-key", resolved_key])
+                            try:
+                                res = subprocess.run(cmd, capture_output=True, text=True)
+                                if res.returncode == 0 and ref_img_path.exists():
+                                    success = True
+                            except Exception as e:
+                                print(f"  Error invoking gemini-image for character {cdir.name}: {e}", file=sys.stderr)
+                        if success:
+                            disk_imgs.append("ref_001.png")
+                            if verbose:
+                                print(f"  -> Successfully generated character reference: {ref_img_path}")
+
+                c_info["images"] = disk_imgs
+                if not dry_run and cinfo_path.parent.exists():
+                    with open(cinfo_path, "w", encoding="utf-8") as f:
+                        json.dump(c_info, f, ensure_ascii=False, indent=2)
+                report["characters"].append(c_info)
+        else:
+            if verbose:
+                print("[storybook assets] No character reference provided; extracting characters from story...")
+            extracted_chars = extract_characters_from_story(markdown_text, api_key=resolved_key)
+            if verbose:
+                print(f"  Found {len(extracted_chars)} character(s): {', '.join(c['name'] for c in extracted_chars)}")
+
+            for c in extracted_chars:
+                cname = c["name"]
+                cdir = workspace.get_char_dir(cname, create=not dry_run)
+                ref_img_path = cdir / "ref_001.png"
+                existing_disk_imgs = find_reference_images(cdir) if cdir.exists() else []
+                img_list = list(existing_disk_imgs)
+
+                if generate_images:
+                    if not img_list or force:
+                        if dry_run:
+                            if verbose:
+                                print(f"  [DRY RUN] Would generate reference portrait for '{cname}' -> {ref_img_path}")
+                            img_list.append("ref_001.png")
+                        else:
+                            gen_prompt = f"{c.get('portrait_prompt', '')}. Isolated character concept art, clean plain neutral background, centered studio portrait."
+                            if verbose:
+                                print(f"  Generating portrait reference for '{cname}' -> {ref_img_path}...")
+                            success = False
+                            if gemini_script and gemini_script.exists():
+                                cmd = [
+                                    sys.executable, str(gemini_script),
+                                    gen_prompt,
+                                    "-o", str(ref_img_path),
+                                    "-m", image_model,
+                                    "-r", "1:1",
+                                    "-s", "1K"
+                                ]
+                                if resolved_key:
+                                    cmd.extend(["--api-key", resolved_key])
+                                try:
+                                    res = subprocess.run(cmd, capture_output=True, text=True)
+                                    if res.returncode == 0 and ref_img_path.exists():
+                                        success = True
+                                except Exception as e:
+                                    print(f"  Error invoking gemini-image for character {cname}: {e}", file=sys.stderr)
+
+                            if success:
+                                img_list.append("ref_001.png")
+                                if verbose:
+                                    print(f"  -> Successfully generated character reference: {ref_img_path}")
+                            else:
+                                if verbose:
+                                    print(f"  (Note: Generation skipped or offline; saved character metadata for {cname})")
+                else:
+                    if verbose and not existing_disk_imgs:
+                        print(f"  Scaffolded character folder for '{cname}' -> {cdir}")
+
+                c_data = {
+                    "name": cname,
+                    "role": c.get("role", "Character"),
+                    "visual_dna": c.get("visual_dna", ""),
+                    "portrait_prompt": c.get("portrait_prompt", ""),
+                    "images": img_list,
+                    "source": "auto_extracted"
+                }
+                if not dry_run:
+                    with open(cdir / "character.json", "w", encoding="utf-8") as f:
+                        json.dump(c_data, f, ensure_ascii=False, indent=2)
+                report["characters"].append(c_data)
+
+    if not dry_run and workspace.char_ref_dir.exists():
+        with open(workspace.char_ref_dir / "characters.json", "w", encoding="utf-8") as f:
+            json.dump({"characters": report["characters"]}, f, ensure_ascii=False, indent=2)
+
+    # --------------------------------------------------------------------------
+    # 2. Style Reference Setup
+    # --------------------------------------------------------------------------
+    if style_refs_arg:
+        if verbose:
+            print(f"[storybook assets] Processing {len(style_refs_arg)} user-specified style reference(s)...")
+        saved_style_imgs = []
+        for src_path_str in style_refs_arg:
+            src_path = Path(src_path_str)
+            dest_file = workspace.style_ref_dir / src_path.name
+            if src_path.exists():
+                if not dry_run:
+                    shutil.copy2(src_path, dest_file)
+                saved_style_imgs.append(dest_file.name)
+                if verbose:
+                    print(f"  -> Imported style reference: {src_path} -> {dest_file}")
+            else:
+                print(f"  Warning: Style reference image '{src_path}' not found.", file=sys.stderr)
+                saved_style_imgs.append(src_path.name)
+
+        if not dry_run and workspace.style_ref_dir.exists():
+            disk_style_imgs = find_reference_images(workspace.style_ref_dir)
+            for di in disk_style_imgs:
+                if di not in saved_style_imgs:
+                    saved_style_imgs.append(di)
+
+        style_info = {
+            "style_name": "User Specified",
+            "style_prompt": style_prompt or "",
+            "images": saved_style_imgs,
+            "source": "user_provided"
+        }
+        if not dry_run:
+            with open(workspace.style_ref_dir / "style.json", "w", encoding="utf-8") as f:
+                json.dump(style_info, f, ensure_ascii=False, indent=2)
+        report["styles"].append(style_info)
+    else:
+        style_json_path = workspace.style_ref_dir / "style.json"
+        if style_json_path.exists() and not force:
+            if verbose:
+                print("[storybook assets] Reusing existing style reference configuration.")
+            s_data: Dict[str, Any] = {}
+            try:
+                with open(style_json_path, "r", encoding="utf-8") as f:
+                    s_data = json.load(f)
+            except Exception:
+                pass
+
+            disk_style_imgs = find_reference_images(workspace.style_ref_dir)
+            if generate_images and not disk_style_imgs:
+                ref_style_img = workspace.style_ref_dir / "ref_001.png"
+                if dry_run:
+                    if verbose:
+                        print(f"  [DRY RUN] Would generate style reference image -> {ref_style_img}")
+                    disk_style_imgs.append("ref_001.png")
+                else:
+                    gen_prompt = f"{s_data.get('reference_prompt', '')}. Visual style reference, scenic environment, no people."
+                    if verbose:
+                        print(f"  Generating style reference image -> {ref_style_img}...")
+                    success = False
+                    if gemini_script and gemini_script.exists():
+                        cmd = [
+                            sys.executable, str(gemini_script),
+                            gen_prompt,
+                            "-o", str(ref_style_img),
+                            "-m", image_model,
+                            "-r", "16:9",
+                            "-s", "1K"
+                        ]
+                        if resolved_key:
+                            cmd.extend(["--api-key", resolved_key])
+                        try:
+                            res = subprocess.run(cmd, capture_output=True, text=True)
+                            if res.returncode == 0 and ref_style_img.exists():
+                                success = True
+                        except Exception as e:
+                            print(f"  Error generating style image: {e}", file=sys.stderr)
+                    if success:
+                        disk_style_imgs.append("ref_001.png")
+                        if verbose:
+                            print(f"  -> Successfully generated style reference: {ref_style_img}")
+
+            s_data["images"] = disk_style_imgs
+            if not dry_run and style_json_path.parent.exists():
+                with open(style_json_path, "w", encoding="utf-8") as f:
+                    json.dump(s_data, f, ensure_ascii=False, indent=2)
+            report["styles"].append(s_data)
+        else:
+            if verbose:
+                print("[storybook assets] No style reference provided; extracting style from story...")
+            extracted_style = extract_style_from_story(markdown_text, api_key=resolved_key)
+            if style_prompt:
+                extracted_style["style_prompt"] = style_prompt
+            if verbose:
+                print(f"  Extracted style: {extracted_style.get('style_name', 'Default')}")
+                print(f"  Prompt: '{extracted_style.get('style_prompt', '')}'")
+
+            ref_style_img = workspace.style_ref_dir / "ref_001.png"
+            existing_style_imgs = find_reference_images(workspace.style_ref_dir) if workspace.style_ref_dir.exists() else []
+            style_imgs = list(existing_style_imgs)
+
+            if generate_images:
+                if not style_imgs or force:
+                    if dry_run:
+                        if verbose:
+                            print(f"  [DRY RUN] Would generate style reference image -> {ref_style_img}")
+                        style_imgs.append("ref_001.png")
+                    else:
+                        gen_prompt = f"{extracted_style.get('reference_prompt', '')}. Visual style reference, scenic environment, no people."
+                        if verbose:
+                            print(f"  Generating style reference image -> {ref_style_img}...")
+                        success = False
+                        if gemini_script and gemini_script.exists():
+                            cmd = [
+                                sys.executable, str(gemini_script),
+                                gen_prompt,
+                                "-o", str(ref_style_img),
+                                "-m", image_model,
+                                "-r", "16:9",
+                                "-s", "1K"
+                            ]
+                            if resolved_key:
+                                cmd.extend(["--api-key", resolved_key])
+                            try:
+                                res = subprocess.run(cmd, capture_output=True, text=True)
+                                if res.returncode == 0 and ref_style_img.exists():
+                                    success = True
+                            except Exception as e:
+                                print(f"  Error generating style image: {e}", file=sys.stderr)
+                        if success:
+                            style_imgs.append("ref_001.png")
+                            if verbose:
+                                print(f"  -> Successfully generated style reference: {ref_style_img}")
+            else:
+                if verbose and not existing_style_imgs:
+                    print(f"  Scaffolded style reference folder: {workspace.style_ref_dir} (no image generated)")
+
+            extracted_style["images"] = style_imgs
+            extracted_style["source"] = "auto_extracted"
+            if not dry_run:
+                with open(workspace.style_ref_dir / "style.json", "w", encoding="utf-8") as f:
+                    json.dump(extracted_style, f, ensure_ascii=False, indent=2)
+            report["styles"].append(extracted_style)
+
+    return report
+
+
+def align_character_with_reference_images(
+    character_name: str,
+    character_dir: Path,
+    image_filenames: List[str],
+    current_data: Dict[str, Any],
+    api_key: Optional[str] = None,
+    model: str = "gemini-2.5-flash",
+    use_ai: bool = True,
+    verbose: bool = False
+) -> Tuple[str, str, Optional[str]]:
+    """
+    Synthesizes and aligns character visual DNA and portrait prompt
+    based on all collected reference images (ref_001.png, ref_002.png, ...).
+    Uses Gemini Multimodal API if available, with intelligent fallback.
+    Returns: (aligned_visual_dna, aligned_portrait_prompt, role)
+    """
+    if not image_filenames:
+        return (
+            current_data.get("visual_dna", f"Character {character_name}"),
+            current_data.get("portrait_prompt", f"Character concept portrait of {character_name}"),
+            current_data.get("role")
+        )
+
+    resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    ref_list_str = ", ".join(image_filenames)
+
+    # 1. AI Multimodal Vision Analysis (when enabled and API key is present)
+    if use_ai and resolved_key:
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=resolved_key)
+            parts = []
+            for fn in image_filenames[:8]:
+                p = character_dir / fn
+                if p.exists() and p.is_file():
+                    mt = mimetypes.guess_type(str(p))[0] or "image/png"
+                    with open(p, "rb") as f:
+                        b = f.read()
+                    if b:
+                        parts.append(types.Part.from_bytes(data=b, mime_type=mt))
+
+            if parts:
+                prompt_text = (
+                    f"You are an expert storybook art director and character designer.\n"
+                    f"Analyze all {len(parts)} attached reference image(s) ({ref_list_str}) for character '{character_name}'.\n"
+                    f"Existing context: role='{current_data.get('role', 'Character')}', notes='{current_data.get('visual_dna', '')}'.\n\n"
+                    f"Your goal is to extract and align a consistent visual specification reflecting ALL reference images ({ref_list_str}).\n"
+                    "Output strictly valid JSON with:\n"
+                    "1. 'visual_dna': Detailed physical description based on the reference images (approximate age, species/build, facial features, hair color & style, eye color, skin tone, clothing/outfit, distinctive items/accessories). Plain studio look only, no background actions or scenery.\n"
+                    "2. 'portrait_prompt': Production-ready text-to-image prompt to generate this exact character consistently in new scenes (centered solo portrait, neutral light gray background, cinematic studio lighting, detailed concept art sheet).\n"
+                    "3. 'role': Refined character role/archetype based on visual cues (or keep existing).\n\n"
+                    "Return ONLY valid JSON: { \"visual_dna\": \"...\", \"portrait_prompt\": \"...\", \"role\": \"...\" }"
+                )
+                if verbose:
+                    print(f"    [AI Vision] Analyzing {len(parts)} reference image(s) for '{character_name}' using {model}...")
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=[prompt_text] + parts
+                )
+                raw_text = getattr(resp, "text", "")
+                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                if match:
+                    res_json = json.loads(match.group(0))
+                    v_dna = res_json.get("visual_dna", "").strip()
+                    p_prompt = res_json.get("portrait_prompt", "").strip()
+                    role = res_json.get("role", "").strip() or current_data.get("role")
+                    if v_dna and p_prompt:
+                        return v_dna, p_prompt, role
+        except Exception as e:
+            if verbose:
+                print(f"    (AI vision note for '{character_name}': {e}; falling back to local reference alignment)", file=sys.stderr)
+
+    # 2. Local / Fallback Alignment
+    base_dna = current_data.get("visual_dna", "").strip() or f"Character {character_name}"
+    clean_dna = re.sub(r'\s*\(visually aligned with reference images: [^\)]+\)\.?$', '', base_dna).strip().rstrip('.')
+    aligned_dna = f"{clean_dna} (visually aligned with reference images: {ref_list_str})."
+
+    base_prompt = current_data.get("portrait_prompt", "").strip() or f"Character concept portrait of {character_name}"
+    clean_prompt = re.sub(r'\s*,?\s*consistent character design aligned with reference images \([^\)]+\)[^,]*', '', base_prompt).strip().rstrip('.')
+    aligned_prompt = f"{clean_prompt}, consistent character design aligned with reference images ({ref_list_str}), solo subject, clean neutral background."
+
+    return aligned_dna, aligned_prompt, current_data.get("role")
+
+
+def align_style_with_reference_images(
+    style_dir: Path,
+    image_filenames: List[str],
+    current_data: Dict[str, Any],
+    api_key: Optional[str] = None,
+    model: str = "gemini-2.5-flash",
+    use_ai: bool = True,
+    verbose: bool = False
+) -> Tuple[str, str, str]:
+    """
+    Synthesizes and aligns visual style prompt and reference prompt
+    based on all collected reference images in style-ref/.
+    Uses Gemini Multimodal API if available, with intelligent fallback.
+    Returns: (style_name, style_prompt, reference_prompt)
+    """
+    if not image_filenames:
+        return (
+            current_data.get("style_name", "Workspace Style"),
+            current_data.get("style_prompt", ""),
+            current_data.get("reference_prompt", "")
+        )
+
+    resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    ref_list_str = ", ".join(image_filenames)
+
+    # 1. AI Vision Analysis
+    if use_ai and resolved_key:
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=resolved_key)
+            parts = []
+            for fn in image_filenames[:8]:
+                p = style_dir / fn
+                if p.exists() and p.is_file():
+                    mt = mimetypes.guess_type(str(p))[0] or "image/png"
+                    with open(p, "rb") as f:
+                        b = f.read()
+                    if b:
+                        parts.append(types.Part.from_bytes(data=b, mime_type=mt))
+
+            if parts:
+                prompt_text = (
+                    f"You are a master storybook visual art director.\n"
+                    f"Analyze all {len(parts)} attached style reference image(s) ({ref_list_str}).\n"
+                    f"Current style notes: name='{current_data.get('style_name', '')}', prompt='{current_data.get('style_prompt', '')}'.\n\n"
+                    "Extract and synthesize the unified artistic style across ALL reference images.\n"
+                    "Output strictly valid JSON with:\n"
+                    "1. 'style_name': Concise descriptive title for this visual art style.\n"
+                    "2. 'style_prompt': Highly descriptive text prompt detailing the artistic medium, textures, brushwork, line quality, lighting, and color palette.\n"
+                    "3. 'reference_prompt': Prompt to generate a scenic environment test image in this exact style with no people.\n\n"
+                    "Return ONLY valid JSON: { \"style_name\": \"...\", \"style_prompt\": \"...\", \"reference_prompt\": \"...\" }"
+                )
+                if verbose:
+                    print(f"    [AI Vision] Analyzing {len(parts)} style reference image(s) using {model}...")
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=[prompt_text] + parts
+                )
+                raw_text = getattr(resp, "text", "")
+                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                if match:
+                    res_json = json.loads(match.group(0))
+                    s_name = res_json.get("style_name", "").strip() or current_data.get("style_name", "Workspace Style")
+                    s_prompt = res_json.get("style_prompt", "").strip()
+                    r_prompt = res_json.get("reference_prompt", "").strip()
+                    if s_prompt:
+                        return s_name, s_prompt, r_prompt or current_data.get("reference_prompt", "")
+        except Exception as e:
+            if verbose:
+                print(f"    (AI vision note for style: {e}; falling back to local reference alignment)", file=sys.stderr)
+
+    # 2. Local / Fallback Alignment
+    s_name = current_data.get("style_name", "Workspace Style")
+    base_sprompt = current_data.get("style_prompt", "").strip() or "Storybook art illustration"
+    clean_sprompt = re.sub(r'\s*\(aligned with visual style references: [^\)]+\)\.?$', '', base_sprompt).strip().rstrip('.')
+    aligned_sprompt = f"{clean_sprompt} (aligned with visual style references: {ref_list_str})."
+
+    r_prompt = current_data.get("reference_prompt", "").strip() or "Scenic environment in reference art style, no people"
+    return s_name, aligned_sprompt, r_prompt
+
+
+def collect_workspace_assets(
+    workspace: StoryWorkspace,
+    api_key: Optional[str] = None,
+    model: str = "gemini-2.5-flash",
+    use_ai: bool = True,
+    dry_run: bool = False,
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    Scans the workspace directory for character and style reference images
+    conforming to naming rules (e.g. ref_001.png, ref_002.png), and updates:
+      - outputs/<stem>/char-ref/<Character>/character.json (images, visual_dna, portrait_prompt)
+      - outputs/<stem>/char-ref/characters.json
+      - outputs/<stem>/style-ref/style.json (images, style_prompt, reference_prompt)
+    Returns a summary report of all discovered assets.
+    """
+    if verbose:
+        print(f"[storybook collect] Scanning reference assets in workspace: {workspace.workspace_dir}")
+
+    characters_report: List[Dict[str, Any]] = []
+    styles_report: List[Dict[str, Any]] = []
+
+    # 1. Scan Character References
+    if workspace.char_ref_dir.exists():
+        char_dirs = sorted([d for d in workspace.char_ref_dir.iterdir() if d.is_dir()], key=lambda d: d.name)
+        for cdir in char_dirs:
+            cname = cdir.name
+            found_imgs = find_reference_images(cdir)
+            cjson_path = cdir / "character.json"
+            c_data: Dict[str, Any] = {}
+
+            if cjson_path.exists():
+                try:
+                    with open(cjson_path, "r", encoding="utf-8") as f:
+                        c_data = json.load(f)
+                except Exception as e:
+                    if verbose:
+                        print(f"  Warning: Could not parse {cjson_path}: {e}", file=sys.stderr)
+
+            if not c_data:
+                c_data = {
+                    "name": cname,
+                    "role": "Character",
+                    "visual_dna": f"Character {cname}",
+                    "portrait_prompt": f"Concept portrait of {cname}",
+                    "source": "collected"
+                }
+
+            c_data["images"] = found_imgs
+
+            if found_imgs:
+                new_dna, new_portrait, new_role = align_character_with_reference_images(
+                    character_name=cname,
+                    character_dir=cdir,
+                    image_filenames=found_imgs,
+                    current_data=c_data,
+                    api_key=api_key,
+                    model=model,
+                    use_ai=use_ai,
+                    verbose=verbose
+                )
+                c_data["visual_dna"] = new_dna
+                c_data["portrait_prompt"] = new_portrait
+                if new_role:
+                    c_data["role"] = new_role
+
+            if not dry_run:
+                with open(cjson_path, "w", encoding="utf-8") as f:
+                    json.dump(c_data, f, ensure_ascii=False, indent=2)
+
+            characters_report.append(c_data)
+            if verbose:
+                status = f"{len(found_imgs)} image(s) -> {found_imgs}" if found_imgs else "no images found"
+                print(f"  - Character '{cname}': {status}")
+                if found_imgs:
+                    dna_preview = c_data.get('visual_dna', '')[:80]
+                    print(f"    Visual DNA     : {dna_preview}...")
+                    prompt_preview = c_data.get('portrait_prompt', '')[:80]
+                    print(f"    Portrait Prompt: {prompt_preview}...")
+
+        # Update char-ref/characters.json
+        if not dry_run and characters_report:
+            with open(workspace.char_ref_dir / "characters.json", "w", encoding="utf-8") as f:
+                json.dump({"characters": characters_report}, f, ensure_ascii=False, indent=2)
+            if verbose:
+                print(f"  -> Updated master index: {workspace.char_ref_dir / 'characters.json'}")
+
+    # 2. Scan Style References
+    if workspace.style_ref_dir.exists():
+        style_imgs = find_reference_images(workspace.style_ref_dir)
+        sjson_path = workspace.style_ref_dir / "style.json"
+        s_data: Dict[str, Any] = {}
+
+        if sjson_path.exists():
+            try:
+                with open(sjson_path, "r", encoding="utf-8") as f:
+                    s_data = json.load(f)
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not parse {sjson_path}: {e}", file=sys.stderr)
+
+        if not s_data:
+            s_data = {
+                "style_name": "Workspace Style",
+                "style_prompt": "",
+                "reference_prompt": "",
+                "source": "collected"
+            }
+
+        s_data["images"] = style_imgs
+
+        if style_imgs:
+            new_sname, new_sprompt, new_rprompt = align_style_with_reference_images(
+                style_dir=workspace.style_ref_dir,
+                image_filenames=style_imgs,
+                current_data=s_data,
+                api_key=api_key,
+                model=model,
+                use_ai=use_ai,
+                verbose=verbose
+            )
+            if new_sname:
+                s_data["style_name"] = new_sname
+            if new_sprompt:
+                s_data["style_prompt"] = new_sprompt
+            if new_rprompt:
+                s_data["reference_prompt"] = new_rprompt
+
+        if not dry_run:
+            with open(sjson_path, "w", encoding="utf-8") as f:
+                json.dump(s_data, f, ensure_ascii=False, indent=2)
+
+        styles_report.append(s_data)
+        if verbose:
+            status = f"{len(style_imgs)} image(s) -> {style_imgs}" if style_imgs else "no images found"
+            print(f"  - Style '{s_data.get('style_name', 'Style')}': {status}")
+            if style_imgs:
+                sprompt_preview = s_data.get('style_prompt', '')[:80]
+                print(f"    Style Prompt   : {sprompt_preview}...")
+            if not dry_run:
+                print(f"  -> Updated style profile: {sjson_path}")
+
+    report = {
+        "workspace": str(workspace.workspace_dir),
+        "stem": workspace.stem,
+        "characters": characters_report,
+        "styles": styles_report,
+        "total_character_images": sum(len(c.get("images", [])) for c in characters_report),
+        "total_style_images": sum(len(s.get("images", [])) for s in styles_report),
+    }
+
+    if verbose:
+        action_desc = "Would collect and align" if dry_run else "Successfully collected and aligned"
+        print(f"[storybook collect] {action_desc} {report['total_character_images']} character reference image(s) and {report['total_style_images']} style reference image(s).")
+
+    return report
+
+
+def resolve_workspaces_for_target(
+    target: Optional[Union[str, Path]] = None,
+    base_output_dir: Union[str, Path] = "outputs"
+) -> List[StoryWorkspace]:
+    """
+    Resolve one or more StoryWorkspace instances based on target:
+    - If target is a file (e.g. abc.md), returns workspace for that story.
+    - If target is a workspace directory (e.g. outputs/abc), returns that workspace.
+    - If target is a base directory (e.g. outputs) or None, discovers all workspaces in that directory.
+    """
+    base_out = Path(base_output_dir)
+    if target:
+        t_path = Path(target)
+        # 1. Target is an existing or named markdown/text file
+        if t_path.suffix.lower() in [".md", ".markdown", ".txt"] or (t_path.is_file()):
+            return [StoryWorkspace(t_path, base_output_dir=base_out)]
+
+        # 2. Target is an existing directory
+        if t_path.is_dir():
+            # Check if target is itself a storybook workspace
+            if (t_path / "char-ref").exists() or (t_path / "style-ref").exists() or (t_path / "images").exists():
+                return [StoryWorkspace(t_path.name, base_output_dir=t_path.parent)]
+
+            # Target is a parent directory containing multiple workspaces
+            sub_workspaces = []
+            for sub in sorted(t_path.iterdir(), key=lambda x: x.name):
+                if sub.is_dir() and ((sub / "char-ref").exists() or (sub / "style-ref").exists() or (sub / "images").exists()):
+                    sub_workspaces.append(StoryWorkspace(sub.name, base_output_dir=t_path))
+            if sub_workspaces:
+                return sub_workspaces
+
+            # If no subdirectories matched, treat target folder itself as the workspace
+            return [StoryWorkspace(t_path.stem, base_output_dir=t_path.parent)]
+
+        # 3. Target is a name or non-existent path: treat as story stem or file
+        return [StoryWorkspace(target, base_output_dir=base_out)]
+
+    # 4. No target specified: scan base_out
+    if not base_out.exists():
+        return []
+
+    # Check if base_out is itself a workspace
+    if (base_out / "char-ref").exists() or (base_out / "style-ref").exists():
+        return [StoryWorkspace(base_out.name, base_output_dir=base_out.parent)]
+
+    discovered = []
+    for sub in sorted(base_out.iterdir(), key=lambda x: x.name):
+        if sub.is_dir() and ((sub / "char-ref").exists() or (sub / "style-ref").exists() or (sub / "images").exists()):
+            discovered.append(StoryWorkspace(sub.name, base_output_dir=base_out))
+
+    return discovered
+
+
+# ==============================================================================
+# AI Media Asset Generation Engine
+# ==============================================================================
+
 def generate_media_assets(
     markdown_text: str,
     output_dir: Union[str, Path] = "outputs",
@@ -822,11 +1923,12 @@ def generate_media_assets(
     style_prompt: Optional[str] = None,
     api_key: Optional[str] = None,
     dry_run: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
+    workspace: Optional[StoryWorkspace] = None
 ) -> Tuple[str, int]:
     """
     Extracts pending tags with prompts, generates image and video assets using Google GenAI / gemini-image.py,
-    saves assets to output_dir, and updates the markdown tags with asset paths and 'generated' status.
+    saves assets to workspace or output_dir, and links/refers them in the markdown.
     Returns: (updated_markdown_text, generated_count)
     """
     tags = extract_media_tags(markdown_text)
@@ -835,6 +1937,14 @@ def generate_media_assets(
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+
+    if workspace:
+        workspace.ensure_dirs()
+        images_dir = workspace.images_dir
+        videos_dir = workspace.videos_dir
+    else:
+        images_dir = out_path
+        videos_dir = out_path
 
     # Filter target tags
     type_norm = media_type.lower()
@@ -845,30 +1955,46 @@ def generate_media_assets(
         if tag_id and t_id != tag_id:
             continue
         if type_norm in ["all", "both"] or t_type == type_norm or (type_norm == "image" and t_type == "image") or (type_norm == "video" and t_type == "video"):
-            # Only generate for pending or tags without asset
             target_tags.append(t)
 
     if not target_tags:
         print("[storybook generate] No matching tags found to generate.")
         return markdown_text, 0
 
+    # Auto-resolve style_prompt and style_image from workspace if available
+    active_style_prompt = style_prompt
+    active_style_image = style_image
+    if workspace:
+        style_json_file = workspace.style_ref_dir / "style.json"
+        if not active_style_prompt and style_json_file.exists():
+            try:
+                with open(style_json_file, "r", encoding="utf-8") as f:
+                    s_data = json.load(f)
+                    active_style_prompt = s_data.get("style_prompt")
+            except Exception:
+                pass
+        if not active_style_image and workspace.style_ref_dir.exists():
+            candidates = sorted(list(workspace.style_ref_dir.glob("*.png")) + list(workspace.style_ref_dir.glob("*.jpg")))
+            if candidates:
+                active_style_image = str(candidates[0])
+
     if dry_run:
         print(f"[storybook generate] DRY RUN: Found {len(target_tags)} media tag(s) to generate:")
-        if style_prompt:
-            print(f"  Applied Style Prompt: '{style_prompt}'")
-        if style_image:
-            print(f"  Applied Style Image : '{style_image}'")
+        if active_style_prompt:
+            print(f"  Applied Style Prompt: '{active_style_prompt}'")
+        if active_style_image:
+            print(f"  Applied Style Image : '{active_style_image}'")
         for t in target_tags:
             ext = ".png" if t.get("type") == "image" else ".mp4"
-            target_file = out_path / f"{t.get('id', 'media')}{ext}"
+            target_file = (images_dir if t.get("type") == "image" else videos_dir) / f"{t.get('id', 'media')}{ext}"
             prompt_preview = t.get('prompt', '')[:60]
             engine = "via gemini-image.py" if t.get("type") == "image" else f"via {video_model}"
             print(f"  - [{t.get('type', 'media').upper()}] {t.get('id', '')}: '{prompt_preview}...' -> {target_file} ({engine})")
         return markdown_text, 0
 
-    # Validate style_image if given
-    if style_image and not Path(style_image).exists():
-        print(f"Warning: Style image '{style_image}' does not exist.", file=sys.stderr)
+    # Validate active_style_image if given
+    if active_style_image and not Path(active_style_image).exists():
+        print(f"Warning: Style image '{active_style_image}' does not exist.", file=sys.stderr)
 
     # Initialize Gemini client
     resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -883,6 +2009,16 @@ def generate_media_assets(
     except ImportError:
         client = None
 
+    # Load character knowledge from workspace if available
+    workspace_chars = []
+    if workspace and (workspace.char_ref_dir / "characters.json").exists():
+        try:
+            with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as f:
+                c_idx = json.load(f)
+                workspace_chars = c_idx.get("characters", [])
+        except Exception:
+            pass
+
     generated_count = 0
     replacements: List[Tuple[str, str]] = []
 
@@ -890,22 +2026,36 @@ def generate_media_assets(
         t_type = t.get("type", "image")
         t_id = t.get("id") or f"media_{generated_count+1:03d}"
         prompt = t.get("prompt", "")
+        sec = t.get("section") or t.get("title") or "Story scene"
         if not prompt:
-            sec = t.get("section") or t.get("title") or "Story scene"
             prompt = f"Storybook visual for '{sec}'"
 
-        # Apply style prompt modifier if provided
+        # Apply character visual DNA enhancement if matched
         effective_prompt = prompt
-        if style_prompt:
-            sep = " " if prompt.endswith((".", "。", "!", "！")) else ". "
-            effective_prompt = f"{prompt}{sep}Art Style: {style_prompt.strip()}"
+        matched_char_dna = []
+        full_context = f"{sec} {prompt} {t.get('context_hint', '')}"
+        for ch in workspace_chars:
+            cname = ch.get("name", "")
+            if cname and cname in full_context:
+                cdna = ch.get("visual_dna", "")
+                if cdna:
+                    matched_char_dna.append(f"{cname} ({cdna})")
+        if matched_char_dna:
+            sep = " " if effective_prompt.endswith((".", "。", "!", "！")) else ". "
+            effective_prompt = f"{effective_prompt}{sep}Character Visual Details: {'; '.join(matched_char_dna)}"
+
+        # Apply style prompt modifier if provided
+        if active_style_prompt:
+            sep = " " if effective_prompt.endswith((".", "。", "!", "！")) else ". "
+            effective_prompt = f"{effective_prompt}{sep}Art Style: {active_style_prompt.strip()}"
 
         if t_type == "image":
-            target_file = out_path / f"{t_id}.png"
+            target_file = images_dir / f"{t_id}.png"
+            rel_asset = f"images/{t_id}.png" if workspace else str(target_file)
             print(f"[storybook generate] Generating image for {t_id} with gemini-image.py (model: {image_model})...")
             print(f"  Prompt: '{effective_prompt}'")
-            if style_image:
-                print(f"  Style Image: '{style_image}'")
+            if active_style_image:
+                print(f"  Style Image: '{active_style_image}'")
 
             # Primary: Call gemini-image.py tool from image-craft
             gemini_script = find_gemini_image_script()
@@ -921,8 +2071,8 @@ def generate_media_assets(
                     "-r", aspect_ratio,
                     "-s", image_size,
                 ]
-                if style_image and Path(style_image).exists():
-                    cmd.extend(["-i", str(Path(style_image).resolve())])
+                if active_style_image and Path(active_style_image).exists():
+                    cmd.extend(["-i", str(Path(active_style_image).resolve())])
                 if resolved_key:
                     cmd.extend(["--api-key", resolved_key])
 
@@ -954,11 +2104,11 @@ def generate_media_assets(
                             image_generated = True
                     else:
                         input_payload = []
-                        if style_image and Path(style_image).exists():
+                        if active_style_image and Path(active_style_image).exists():
                             try:
-                                with open(style_image, "rb") as sif:
+                                with open(active_style_image, "rb") as sif:
                                     sb64 = base64.b64encode(sif.read()).decode("utf-8")
-                                mime_t, _ = mimetypes.guess_type(style_image)
+                                mime_t, _ = mimetypes.guess_type(active_style_image)
                                 input_payload.append({
                                     "type": "image",
                                     "data": sb64,
@@ -1005,29 +2155,44 @@ def generate_media_assets(
 
             if image_generated:
                 print(f"  -> Saved asset: {target_file}")
-                t["asset"] = str(target_file)
+                t["asset"] = rel_asset
                 t["status"] = "generated"
                 generated_count += 1
                 new_tag = format_tag(t, tag_format=t.get("_format", "json-comment"))
-                replacements.append((t.get("_raw_tag", ""), new_tag))
+
+                # Reference images in markdown
+                if workspace:
+                    md_embed = f"\n\n![{t_id}]({rel_asset})"
+                    raw_tag = t.get("_raw_tag", "")
+                    idx = markdown_text.find(raw_tag)
+                    after_tag = markdown_text[idx + len(raw_tag): idx + len(raw_tag) + 120] if idx != -1 else ""
+                    if rel_asset in after_tag or f"[{t_id}]" in after_tag:
+                        replacement_chunk = new_tag
+                    else:
+                        replacement_chunk = f"{new_tag}{md_embed}"
+                else:
+                    replacement_chunk = new_tag
+
+                replacements.append((t.get("_raw_tag", ""), replacement_chunk))
             else:
                 print(f"  Failed to generate image asset for {t_id}.", file=sys.stderr)
 
         elif t_type == "video":
-            target_file = out_path / f"{t_id}.mp4"
+            target_file = videos_dir / f"{t_id}.mp4"
+            rel_asset = f"videos/{t_id}.mp4" if workspace else str(target_file)
             print(f"[storybook generate] Requesting video generation for {t_id} with {video_model}...")
             print(f"  Prompt: '{effective_prompt}'")
-            if style_image:
-                print(f"  Style Image: '{style_image}'")
+            if active_style_image:
+                print(f"  Style Image: '{active_style_image}'")
             try:
                 # Video generation via Google GenAI Veo
                 video_kwargs = {
                     "model": video_model,
                     "prompt": effective_prompt
                 }
-                if style_image and Path(style_image).exists():
+                if active_style_image and Path(active_style_image).exists():
                     try:
-                        with open(style_image, "rb") as sif:
+                        with open(active_style_image, "rb") as sif:
                             img_data = sif.read()
                         from google.genai import types
                         video_kwargs["image"] = types.Image(image_bytes=img_data)
@@ -1035,11 +2200,24 @@ def generate_media_assets(
                         pass
                 op = client.models.generate_videos(**video_kwargs)
                 print(f"  -> Video operation submitted: {op}")
-                t["asset"] = str(target_file)
+                t["asset"] = rel_asset
                 t["status"] = "generating"
                 generated_count += 1
                 new_tag = format_tag(t, tag_format=t.get("_format", "json-comment"))
-                replacements.append((t.get("_raw_tag", ""), new_tag))
+
+                if workspace:
+                    md_embed = f'\n\n<video src="{rel_asset}" controls></video>'
+                    raw_tag = t.get("_raw_tag", "")
+                    idx = markdown_text.find(raw_tag)
+                    after_tag = markdown_text[idx + len(raw_tag): idx + len(raw_tag) + 120] if idx != -1 else ""
+                    if rel_asset in after_tag or f"src=\"{rel_asset}\"" in after_tag:
+                        replacement_chunk = new_tag
+                    else:
+                        replacement_chunk = f"{new_tag}{md_embed}"
+                else:
+                    replacement_chunk = new_tag
+
+                replacements.append((t.get("_raw_tag", ""), replacement_chunk))
             except Exception as e:
                 print(f"  Note: Video generation not available or error: {e}", file=sys.stderr)
 
@@ -1307,6 +2485,228 @@ Another paragraph here.
         self.assertIn("# 测试故事", scaffold)
         self.assertIn("第一章", scaffold)
 
+    def test_story_workspace_structure(self):
+        ws = StoryWorkspace("abc.md", base_output_dir="outputs")
+        self.assertEqual(ws.stem, "abc")
+        self.assertEqual(ws.workspace_dir, Path("outputs/abc"))
+        self.assertEqual(ws.output_md, Path("outputs/abc/abc-output.md"))
+        self.assertEqual(ws.images_dir, Path("outputs/abc/images"))
+        self.assertEqual(ws.videos_dir, Path("outputs/abc/videos"))
+        self.assertEqual(ws.char_ref_dir, Path("outputs/abc/char-ref"))
+        self.assertEqual(ws.style_ref_dir, Path("outputs/abc/style-ref"))
+
+        char_a_dir = ws.get_char_dir("A")
+        self.assertEqual(char_a_dir, Path("outputs/abc/char-ref/A"))
+
+        rel_img = ws.get_relative_asset_path(ws.images_dir / "img_001.png")
+        self.assertEqual(rel_img, "images/img_001.png")
+
+        rel_vid = ws.get_relative_asset_path(ws.videos_dir / "vid_001.mp4")
+        self.assertEqual(rel_vid, "videos/vid_001.mp4")
+
+    def test_parse_char_refs_arg(self):
+        # 1. Comma-separated single string
+        res1 = parse_char_refs_arg(["A:XX.png, A:YY.png, B:ZZ.png"])
+        self.assertEqual(res1, {"A": ["XX.png", "YY.png"], "B": ["ZZ.png"]})
+
+        # 2. Multiple arguments
+        res2 = parse_char_refs_arg(["A:XX.png", "B:ZZ.png", "C:WW.png"])
+        self.assertEqual(res2, {"A": ["XX.png"], "B": ["ZZ.png"], "C": ["WW.png"]})
+
+        # 3. Space-separated within string
+        res3 = parse_char_refs_arg(["A:XX.png B:ZZ.png"])
+        self.assertEqual(res3, {"A": ["XX.png"], "B": ["ZZ.png"]})
+
+    def test_parse_style_refs_arg(self):
+        res1 = parse_style_refs_arg(["XX.png, YY.png, ZZ.png"])
+        self.assertEqual(res1, ["XX.png", "YY.png", "ZZ.png"])
+
+        res2 = parse_style_refs_arg(["XX.png", "YY.png"])
+        self.assertEqual(res2, ["XX.png", "YY.png"])
+
+    def test_extract_characters_and_style(self):
+        chars = extract_characters_from_story(self.story_md)
+        self.assertGreater(len(chars), 0)
+        char_names = [c["name"] for c in chars]
+        self.assertIn("小明", char_names)
+
+        style = extract_style_from_story(self.story_md)
+        self.assertIn("style_name", style)
+        self.assertIn("style_prompt", style)
+        self.assertIn("reference_prompt", style)
+
+    def test_setup_workspace_assets_dry_run(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = StoryWorkspace("test_story.md", base_output_dir=tmp_dir)
+            report = setup_workspace_assets(
+                workspace=ws,
+                markdown_text=self.story_md,
+                char_refs_arg={"A": ["test1.png"], "B": ["test2.png"]},
+                style_refs_arg=["style1.png"],
+                dry_run=True,
+                verbose=False
+            )
+            self.assertEqual(len(report["characters"]), 2)
+            self.assertEqual(len(report["styles"]), 1)
+
+    def test_natural_sort_and_find_reference_images(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            td = Path(tmp_dir)
+            filenames = [
+                "ref_010.png",
+                "ref_002.png",
+                "ref_001.png",
+                "ref_003.jpg",
+                "custom_portrait.webp",
+                "notes.txt",
+                "character.json"
+            ]
+            for fn in filenames:
+                (td / fn).write_text("dummy", encoding="utf-8")
+
+            discovered = find_reference_images(td)
+            expected = [
+                "ref_001.png",
+                "ref_002.png",
+                "ref_003.jpg",
+                "ref_010.png",
+                "custom_portrait.webp"
+            ]
+            self.assertEqual(discovered, expected)
+
+    def test_setup_workspace_assets_default_no_image_generation(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = StoryWorkspace("test_scaffold.md", base_output_dir=tmp_dir)
+            report = setup_workspace_assets(
+                workspace=ws,
+                markdown_text=self.story_md,
+                generate_images=False,
+                dry_run=False,
+                verbose=False
+            )
+            # Directories exist
+            self.assertTrue(ws.images_dir.exists())
+            self.assertTrue(ws.videos_dir.exists())
+            self.assertTrue(ws.char_ref_dir.exists())
+            self.assertTrue(ws.style_ref_dir.exists())
+
+            # JSON metadata files exist
+            self.assertTrue((ws.char_ref_dir / "characters.json").exists())
+            self.assertTrue((ws.style_ref_dir / "style.json").exists())
+
+            # But NO image files generated!
+            all_pngs = list(ws.workspace_dir.rglob("*.png"))
+            self.assertEqual(len(all_pngs), 0)
+
+            # Metadata lists empty images
+            for c in report["characters"]:
+                self.assertEqual(c["images"], [])
+            for s in report["styles"]:
+                self.assertEqual(s["images"], [])
+
+    def test_collect_workspace_assets(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = StoryWorkspace("collect_test.md", base_output_dir=tmp_dir)
+            # 1. First scaffold workspace without generating images
+            setup_workspace_assets(
+                workspace=ws,
+                markdown_text=self.story_md,
+                generate_images=False,
+                dry_run=False,
+                verbose=False
+            )
+
+            # 2. User places reference images in character and style folders
+            char_a_dir = ws.get_char_dir("小明")
+            (char_a_dir / "ref_002.png").write_text("img2", encoding="utf-8")
+            (char_a_dir / "ref_001.png").write_text("img1", encoding="utf-8")
+            (ws.style_ref_dir / "ref_001.png").write_text("style_img", encoding="utf-8")
+
+            # 3. Run collect_workspace_assets
+            collect_report = collect_workspace_assets(ws, dry_run=False, verbose=False)
+
+            self.assertEqual(collect_report["total_character_images"], 2)
+            self.assertEqual(collect_report["total_style_images"], 1)
+
+            # Verify character.json was updated with images AND aligned visual_dna + portrait_prompt
+            with open(char_a_dir / "character.json", "r", encoding="utf-8") as f:
+                c_data = json.load(f)
+            self.assertEqual(c_data["images"], ["ref_001.png", "ref_002.png"])
+            self.assertIn("ref_001.png", c_data["visual_dna"])
+            self.assertIn("ref_002.png", c_data["visual_dna"])
+            self.assertIn("ref_001.png", c_data["portrait_prompt"])
+            self.assertIn("ref_002.png", c_data["portrait_prompt"])
+
+            # Verify master characters.json was updated
+            with open(ws.char_ref_dir / "characters.json", "r", encoding="utf-8") as f:
+                idx_data = json.load(f)
+            char_entry = next((c for c in idx_data["characters"] if c["name"] == "小明"), None)
+            self.assertIsNotNone(char_entry)
+            self.assertEqual(char_entry["images"], ["ref_001.png", "ref_002.png"])
+            self.assertIn("ref_001.png", char_entry["visual_dna"])
+            self.assertIn("ref_002.png", char_entry["visual_dna"])
+            self.assertIn("ref_001.png", char_entry["portrait_prompt"])
+            self.assertIn("ref_002.png", char_entry["portrait_prompt"])
+
+            # Verify style.json was updated with images AND aligned style_prompt
+            with open(ws.style_ref_dir / "style.json", "r", encoding="utf-8") as f:
+                s_data = json.load(f)
+            self.assertEqual(s_data["images"], ["ref_001.png"])
+            self.assertIn("ref_001.png", s_data["style_prompt"])
+
+    def test_collect_workspace_assets_dry_run(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = StoryWorkspace("collect_dry.md", base_output_dir=tmp_dir)
+            setup_workspace_assets(
+                workspace=ws,
+                markdown_text=self.story_md,
+                generate_images=False,
+                dry_run=False,
+                verbose=False
+            )
+            char_dir = ws.get_char_dir("小明")
+            (char_dir / "ref_001.png").write_text("img", encoding="utf-8")
+
+            # Dry run collect
+            report = collect_workspace_assets(ws, dry_run=True, verbose=False)
+            self.assertEqual(report["total_character_images"], 1)
+
+            # File on disk should still have original empty images list
+            with open(char_dir / "character.json", "r", encoding="utf-8") as f:
+                c_data = json.load(f)
+            self.assertEqual(c_data["images"], [])
+
+    def test_resolve_workspaces_for_target(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            td = Path(tmp_dir)
+            ws1 = StoryWorkspace("story1.md", base_output_dir=td)
+            ws1.ensure_dirs()
+            ws2 = StoryWorkspace("story2.md", base_output_dir=td)
+            ws2.ensure_dirs()
+
+            # Target as file
+            res1 = resolve_workspaces_for_target("story1.md", base_output_dir=td)
+            self.assertEqual(len(res1), 1)
+            self.assertEqual(res1[0].stem, "story1")
+
+            # Target as directory
+            res2 = resolve_workspaces_for_target(str(ws1.workspace_dir), base_output_dir=td)
+            self.assertEqual(len(res2), 1)
+            self.assertEqual(res2[0].stem, "story1")
+
+            # Target as None (scans base_output_dir)
+            res_all = resolve_workspaces_for_target(None, base_output_dir=td)
+            self.assertEqual(len(res_all), 2)
+            stems = sorted([w.stem for w in res_all])
+            self.assertEqual(stems, ["story1", "story2"])
+
+
 
 # ==============================================================================
 # CLI Parsers & Main Dispatcher
@@ -1412,6 +2812,8 @@ def main():
     p_m_gen.add_argument("-s", "--size", default="1K", help="Image resolution size (default: 1K).")
     p_m_gen.add_argument("--style-image", dest="style_image", help="Path to reference image file for visual style.")
     p_m_gen.add_argument("--style-prompt", dest="style_prompt", help="Text prompt specifying the visual art style.")
+    p_m_gen.add_argument("--char-refs", "--char-ref", dest="char_refs", action="append", help="Character reference mapping: Name:image_path, ...")
+    p_m_gen.add_argument("--style-ref", "--style-refs", dest="style_refs", action="append", help="Style reference image(s): image1.png, image2.png, ...")
     p_m_gen.add_argument("--api-key", help="Gemini API key.")
     p_m_gen.add_argument("--dry-run", action="store_true", help="Preview tags and output files without generating.")
 
@@ -1438,18 +2840,99 @@ def main():
     p_m_pipe.add_argument("-s", "--size", default="1K", help="Resolution.")
     p_m_pipe.add_argument("--style-image", dest="style_image", help="Path to reference image file for visual style.")
     p_m_pipe.add_argument("--style-prompt", dest="style_prompt", help="Text prompt specifying the visual art style.")
+    p_m_pipe.add_argument("--char-refs", "--char-ref", dest="char_refs", action="append", help="Character reference mapping: Name:image_path, ...")
+    p_m_pipe.add_argument("--style-ref", "--style-refs", dest="style_refs", action="append", help="Style reference image(s): image1.png, image2.png, ...")
     p_m_pipe.add_argument("--api-key", help="Gemini API key.")
     p_m_pipe.add_argument("--dry-run", action="store_true", help="Dry run asset generation.")
     p_m_pipe.add_argument("-c", "--clean-media", nargs="?", const="all", choices=["image", "video", "all"], help="Clean existing markdown media first.")
 
     # --------------------------------------------------------------------------
-    # 3. 'test' command
+    # 3. 'assets' command
+    # --------------------------------------------------------------------------
+    p_assets = subparsers.add_parser(
+        "assets",
+        help="Manage story workspace reference assets (characters and style)."
+    )
+    p_assets.add_argument("input_file", nargs="?", default=None, help="Input markdown file.")
+    p_assets.add_argument("-g", "--generate", action="store_true", help="Generate AI reference images for extracted characters and styles (default: only scaffold structure and JSON metadata).")
+    p_assets.add_argument("--char-refs", "--char-ref", dest="char_refs", action="append", help="Character reference mapping: Name:image_path, ...")
+    p_assets.add_argument("--style-ref", "--style-refs", dest="style_refs", action="append", help="Style reference image(s): image1.png, image2.png, ...")
+    p_assets.add_argument("--style-prompt", help="Visual art style prompt.")
+    p_assets.add_argument("--output-dir", default="outputs", help="Base output directory (default: outputs).")
+    p_assets.add_argument("-m", "--model", default="gemini-3.1-flash-image", help="Image generation model.")
+    p_assets.add_argument("--api-key", help="Gemini API key.")
+    p_assets.add_argument("--force", action="store_true", help="Force re-extract/regenerate reference assets.")
+    p_assets.add_argument("--dry-run", action="store_true", help="Preview asset extraction without generating files.")
+
+    # --------------------------------------------------------------------------
+    # 4. 'char-ref' command
+    # --------------------------------------------------------------------------
+    p_char_ref = subparsers.add_parser(
+        "char-ref",
+        help="Manage character references (auto-extract or import)."
+    )
+    p_char_ref.add_argument("input_file", nargs="?", default=None, help="Input markdown file.")
+    p_char_ref.add_argument("-g", "--generate", action="store_true", help="Generate AI portrait reference images for extracted characters.")
+    p_char_ref.add_argument("--char-refs", "--char-ref", dest="char_refs", action="append", help="Character reference mapping: Name:image_path, ...")
+    p_char_ref.add_argument("--output-dir", default="outputs", help="Base output directory (default: outputs).")
+    p_char_ref.add_argument("-m", "--model", default="gemini-3.1-flash-image", help="Image generation model.")
+    p_char_ref.add_argument("--api-key", help="Gemini API key.")
+    p_char_ref.add_argument("--force", action="store_true", help="Force re-extract/regenerate character references.")
+    p_char_ref.add_argument("--dry-run", action="store_true", help="Preview character extraction without generating files.")
+
+    # --------------------------------------------------------------------------
+    # 5. 'style-ref' command
+    # --------------------------------------------------------------------------
+    p_style_ref = subparsers.add_parser(
+        "style-ref",
+        help="Manage style references (auto-extract or import)."
+    )
+    p_style_ref.add_argument("input_file", nargs="?", default=None, help="Input markdown file.")
+    p_style_ref.add_argument("-g", "--generate", action="store_true", help="Generate AI style reference image for extracted style.")
+    p_style_ref.add_argument("--style-ref", "--style-refs", dest="style_refs", action="append", help="Style reference image(s): image1.png, image2.png, ...")
+    p_style_ref.add_argument("--style-prompt", help="Visual art style prompt.")
+    p_style_ref.add_argument("--output-dir", default="outputs", help="Base output directory (default: outputs).")
+    p_style_ref.add_argument("-m", "--model", default="gemini-3.1-flash-image", help="Image generation model.")
+    p_style_ref.add_argument("--api-key", help="Gemini API key.")
+    p_style_ref.add_argument("--force", action="store_true", help="Force re-extract/regenerate style references.")
+    p_style_ref.add_argument("--dry-run", action="store_true", help="Preview style extraction without generating files.")
+
+    # --------------------------------------------------------------------------
+    # 6. 'collect' command (and 'storybook assets collect')
+    # --------------------------------------------------------------------------
+    p_collect = subparsers.add_parser(
+        "collect",
+        help="Scan workspace for reference images (ref_xxx.png), align character visual DNA and portrait prompts, and sync JSON files."
+    )
+    p_collect.add_argument("target", nargs="?", default=None, help="Input markdown file or workspace directory (default: scan all workspaces in output directory).")
+    p_collect.add_argument("--output-dir", default="outputs", help="Base output directory (default: outputs).")
+    p_collect.add_argument("-m", "--model", default="gemini-2.5-flash", help="Multimodal vision model for reference alignment (default: gemini-2.5-flash).")
+    p_collect.add_argument("--api-key", help="Gemini API key for AI vision analysis.")
+    p_collect.add_argument("--no-ai", dest="use_ai", action="store_false", default=True, help="Disable AI multimodal vision analysis and use local reference alignment.")
+    p_collect.add_argument("--dry-run", action="store_true", help="Preview discovered images without modifying JSON files.")
+    p_collect.add_argument("-v", "--verbose", action="store_true", default=True, help="Detailed discovery logs.")
+
+    # --------------------------------------------------------------------------
+    # 7. 'test' command
     # --------------------------------------------------------------------------
     p_test = subparsers.add_parser("test", help="Run embedded unit test suite.")
     p_test.add_argument("-v", "--verbose", action="store_true", help="Verbose test output.")
 
-    # Handle special case: 'media <file>' where <file> is passed directly without subaction
+    # Handle argument aliases
     argv = sys.argv[1:]
+    # Alias: 'storybook assets char-ref ...' -> 'storybook char-ref ...'
+    if len(argv) >= 2 and argv[0] == "assets" and argv[1] in ["char-ref", "style-ref"]:
+        argv.pop(0)
+
+    # Alias: 'storybook assets collect ...' -> 'storybook collect ...'
+    if len(argv) >= 2 and argv[0] == "assets" and argv[1] == "collect":
+        argv.pop(0)
+    elif len(argv) >= 1 and argv[0] == "assets" and "collect" in argv:
+        argv.remove("assets")
+        argv.remove("collect")
+        argv.insert(0, "collect")
+
+    # Handle special case: 'media <file>' where <file> is passed directly without subaction
     subactions = {"tag", "prompt", "generate", "clean", "stats", "extract", "pipeline"}
     if len(argv) >= 1 and argv[0] == "media":
         if len(argv) == 1:
@@ -1486,6 +2969,93 @@ def main():
             genre=args.genre,
             chapters=args.chapters
         )
+        sys.exit(0)
+
+    # --------------------------------------------------------------------------
+    # Dispatch: collect
+    # --------------------------------------------------------------------------
+    if args.command == "collect":
+        target = getattr(args, "target", None)
+        base_out = getattr(args, "output_dir", "outputs")
+        dry_run = getattr(args, "dry_run", False)
+        verbose = getattr(args, "verbose", True)
+        api_key = getattr(args, "api_key", None)
+        model = getattr(args, "model", "gemini-2.5-flash")
+        use_ai = getattr(args, "use_ai", True)
+
+        workspaces = resolve_workspaces_for_target(target, base_output_dir=base_out)
+        if not workspaces:
+            print(f"[storybook collect] No storybook workspaces found in '{base_out}'.", file=sys.stderr)
+            if target:
+                print(f"Target '{target}' does not appear to be an existing story file or workspace.", file=sys.stderr)
+            else:
+                print("Specify a story file or directory: python storybook.py assets collect <story.md>", file=sys.stderr)
+            sys.exit(1)
+
+        total_collected_chars = 0
+        total_collected_styles = 0
+        for ws in workspaces:
+            res = collect_workspace_assets(
+                workspace=ws,
+                api_key=api_key,
+                model=model,
+                use_ai=use_ai,
+                dry_run=dry_run,
+                verbose=verbose
+            )
+            total_collected_chars += res.get("total_character_images", 0)
+            total_collected_styles += res.get("total_style_images", 0)
+
+        action_word = "Would collect" if dry_run else "Collected"
+        print(f"\n[storybook collect] Finished: {action_word} {total_collected_chars} character image(s) and {total_collected_styles} style image(s) across {len(workspaces)} workspace(s).")
+        sys.exit(0)
+
+    # --------------------------------------------------------------------------
+    # Dispatch: assets / char-ref / style-ref
+    # --------------------------------------------------------------------------
+    if args.command in ["assets", "char-ref", "style-ref"]:
+        if not getattr(args, "input_file", None) and sys.stdin.isatty():
+            if args.command == "assets":
+                p_assets.print_help()
+            elif args.command == "char-ref":
+                p_char_ref.print_help()
+            else:
+                p_style_ref.print_help()
+            sys.exit(0)
+
+        input_text = read_input_content(args.input_file)
+        workspace = StoryWorkspace(args.input_file, base_output_dir=getattr(args, "output_dir", "outputs"))
+
+        char_refs_arg = parse_char_refs_arg(getattr(args, "char_refs", None)) if args.command in ["assets", "char-ref"] else None
+        style_refs_arg = parse_style_refs_arg(getattr(args, "style_refs", None)) if args.command in ["assets", "style-ref"] else None
+
+        should_generate = getattr(args, "generate", False)
+
+        report = setup_workspace_assets(
+            workspace=workspace,
+            markdown_text=input_text,
+            char_refs_arg=char_refs_arg,
+            style_refs_arg=style_refs_arg,
+            style_prompt=getattr(args, "style_prompt", None),
+            image_model=getattr(args, "model", "gemini-3.1-flash-image"),
+            api_key=getattr(args, "api_key", None),
+            generate_images=should_generate,
+            force=getattr(args, "force", False),
+            dry_run=getattr(args, "dry_run", False),
+            verbose=True
+        )
+        print(f"\n[storybook {args.command}] Asset setup completed for workspace '{workspace.stem}':")
+        print(f"  Workspace: {workspace.workspace_dir}")
+        print(f"  Characters: {len(report.get('characters', []))} character reference(s)")
+        for c in report.get("characters", []):
+            print(f"    - {c.get('name')}: {len(c.get('images', []))} image(s) ({c.get('source')})")
+        print(f"  Styles: {len(report.get('styles', []))} style profile(s)")
+        for s in report.get("styles", []):
+            print(f"    - {s.get('style_name', 'Style')}: {len(s.get('images', []))} image(s) ({s.get('source')})")
+        if not should_generate:
+            print(f"\nTip: Place your reference images (e.g. ref_001.png, ref_002.png) in character/style folders,")
+            print(f"     then run: python storybook.py assets collect {workspace.stem}.md")
+            print(f"     Or generate AI references with: python storybook.py assets {workspace.stem}.md --generate")
         sys.exit(0)
 
     # --------------------------------------------------------------------------
@@ -1567,9 +3137,29 @@ def main():
         # Mode: generate only
         if action == "generate":
             input_text = read_input_content(args.input_file)
+            workspace = StoryWorkspace(args.input_file, base_output_dir=args.output_dir)
+
+            char_refs_arg = parse_char_refs_arg(getattr(args, "char_refs", None))
+            style_refs_arg = parse_style_refs_arg(getattr(args, "style_refs", None))
+            if getattr(args, "style_image", None):
+                style_refs_arg.append(args.style_image)
+
+            # Ensure workspace reference assets exist
+            setup_workspace_assets(
+                workspace=workspace,
+                markdown_text=input_text,
+                char_refs_arg=char_refs_arg,
+                style_refs_arg=style_refs_arg,
+                style_prompt=getattr(args, "style_prompt", None),
+                image_model=args.model,
+                api_key=args.api_key,
+                dry_run=args.dry_run,
+                verbose=False
+            )
+
             updated, count = generate_media_assets(
                 markdown_text=input_text,
-                output_dir=args.output_dir,
+                output_dir=workspace.workspace_dir,
                 media_type=args.type,
                 tag_id=args.tag_id,
                 image_model=args.model,
@@ -1579,19 +3169,29 @@ def main():
                 style_image=getattr(args, "style_image", None),
                 style_prompt=getattr(args, "style_prompt", None),
                 api_key=args.api_key,
-                dry_run=args.dry_run
+                dry_run=args.dry_run,
+                workspace=workspace
             )
+            target_out = args.output or (args.input_file if args.in_place else str(workspace.output_md))
             if not args.dry_run or args.output or args.in_place:
-                write_output_content(updated, args.output, args.input_file, args.in_place)
+                write_output_content(updated, target_out, args.input_file, args.in_place)
             sys.exit(0)
 
         # ----------------------------------------------------------------------
-        # Default 'media <file>': Full End-to-End: tag -> prompt -> generate
+        # Default 'media <file>': Full End-to-End: tag -> prompt -> assets -> generate
         # ----------------------------------------------------------------------
         input_text = read_input_content(args.input_file)
+        workspace = StoryWorkspace(args.input_file, base_output_dir=getattr(args, "output_dir", "outputs"))
+        workspace.ensure_dirs()
+
+        char_refs_arg = parse_char_refs_arg(getattr(args, "char_refs", None))
+        style_refs_arg = parse_style_refs_arg(getattr(args, "style_refs", None))
+        if getattr(args, "style_image", None):
+            style_refs_arg.append(args.style_image)
+
         m_types = args.media_types or ["all"]
 
-        print("[storybook media] Step 1/3: Tagging story with media markers...")
+        print("[storybook media] Step 1/4: Tagging story with media markers...")
         tagged_text = insert_media_tags(
             markdown_text=input_text,
             media_types=m_types,
@@ -1601,13 +3201,26 @@ def main():
             remove_existing=True
         )
 
-        print("[storybook media] Step 2/3: Generating and updating context prompts...")
+        print("[storybook media] Step 2/4: Generating and updating context prompts...")
         prompted_text = update_media_tag_prompts(tagged_text, force=False)
 
-        print("[storybook media] Step 3/3: Media asset generation pipeline...")
+        print("[storybook media] Step 3/4: Setting up workspace reference assets...")
+        setup_workspace_assets(
+            workspace=workspace,
+            markdown_text=prompted_text,
+            char_refs_arg=char_refs_arg,
+            style_refs_arg=style_refs_arg,
+            style_prompt=getattr(args, "style_prompt", None),
+            image_model=getattr(args, "model", "gemini-3.1-flash-image"),
+            api_key=getattr(args, "api_key", None),
+            dry_run=getattr(args, "dry_run", False),
+            verbose=True
+        )
+
+        print("[storybook media] Step 4/4: Media asset generation pipeline...")
         final_text, gen_count = generate_media_assets(
             markdown_text=prompted_text,
-            output_dir=getattr(args, "output_dir", "outputs"),
+            output_dir=workspace.workspace_dir,
             media_type="all",
             image_model=getattr(args, "model", "gemini-3.1-flash-image"),
             aspect_ratio=getattr(args, "ratio", "16:9"),
@@ -1615,11 +3228,13 @@ def main():
             style_image=getattr(args, "style_image", None),
             style_prompt=getattr(args, "style_prompt", None),
             api_key=getattr(args, "api_key", None),
-            dry_run=getattr(args, "dry_run", False)
+            dry_run=getattr(args, "dry_run", False),
+            workspace=workspace
         )
 
+        target_out = args.output or (args.input_file if args.in_place else str(workspace.output_md))
         if not getattr(args, "dry_run", False) or args.output or args.in_place:
-            write_output_content(final_text, args.output, args.input_file, args.in_place)
+            write_output_content(final_text, target_out, args.input_file, args.in_place)
         sys.exit(0)
 
 

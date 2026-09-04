@@ -1,5 +1,6 @@
 # Output directory for generated outputs
 outputs/
+tests/
 
 # Virtual environment
 .venv/
