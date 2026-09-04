@@ -1,0 +1,112 @@
+.story-markdown {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  line-height: 1.85;
+  color: var(--md-sys-color-on-surface);
+  max-width: 780px;
+  margin: 0 auto;
+  word-break: break-word;
+}
+
+.story-markdown h1 {
+  font-family: var(--font-sans);
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--md-sys-color-primary);
+  margin-top: 2rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--md-sys-color-surface-container-highest);
+}
+
+.story-markdown h2 {
+  font-family: var(--font-sans);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--md-sys-color-on-surface);
+  margin-top: 2.25rem;
+  margin-bottom: 1rem;
+}
+
+.story-markdown h3 {
+  font-family: var(--font-sans);
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.story-markdown p {
+  margin-bottom: 1.5rem;
+  text-align: justify;
+}
+
+.story-markdown blockquote {
+  border-left: 4px solid var(--md-sys-color-primary);
+  background-color: var(--md-sys-color-surface-container-low);
+  padding: 1rem 1.5rem;
+  margin: 1.5rem 0;
+  border-radius: 0 var(--shape-corner-medium) var(--shape-corner-medium) 0;
+  font-style: italic;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.story-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background-color: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-primary);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--shape-corner-extra-small);
+}
+
+.story-markdown pre {
+  background-color: var(--md-sys-color-surface-container-highest);
+  padding: 1rem;
+  border-radius: var(--shape-corner-medium);
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.story-markdown pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--md-sys-color-on-surface);
+}
+
+.story-markdown hr {
+  border: none;
+  height: 1px;
+  background: var(--md-sys-color-outline-variant);
+  margin: 2.5rem 0;
+}
+
+.story-markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--shape-corner-large);
+  box-shadow: var(--elevation-2);
+  display: block;
+  margin: 1.5rem auto;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.story-markdown img:hover {
+  transform: scale(1.01);
+  box-shadow: var(--elevation-3);
+  cursor: pointer;
+}
+
+.story-markdown ul,
+.story-markdown ol {
+  padding-left: 1.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.story-markdown li {
+  margin-bottom: 0.5rem;
+}

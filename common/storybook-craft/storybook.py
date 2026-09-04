@@ -2913,7 +2913,18 @@ def main():
     p_collect.add_argument("-v", "--verbose", action="store_true", default=True, help="Detailed discovery logs.")
 
     # --------------------------------------------------------------------------
-    # 7. 'test' command
+    # 7. 'view' command
+    # --------------------------------------------------------------------------
+    p_view = subparsers.add_parser(
+        "view",
+        help="Launch the MD3 Storybook Craft web viewer to review workspaces, characters, and media."
+    )
+    p_view.add_argument("--port", type=int, default=5173, help="Port to listen on (default: 5173).")
+    p_view.add_argument("--no-open", action="store_true", help="Do not automatically open browser.")
+    p_view.add_argument("--output-dir", default="outputs", help="Base output directory to inspect (default: outputs).")
+
+    # --------------------------------------------------------------------------
+    # 8. 'test' command
     # --------------------------------------------------------------------------
     p_test = subparsers.add_parser("test", help="Run embedded unit test suite.")
     p_test.add_argument("-v", "--verbose", action="store_true", help="Verbose test output.")
@@ -2958,6 +2969,25 @@ def main():
         runner = unittest.TextTestRunner(verbosity=verbosity)
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+
+    # --------------------------------------------------------------------------
+    # Dispatch: view
+    # --------------------------------------------------------------------------
+    if args.command == "view":
+        viewer_server_path = Path(__file__).resolve().parent / "viewer" / "server.py"
+        if not viewer_server_path.exists():
+            print(f"[storybook view] Error: Viewer server not found at {viewer_server_path}", file=sys.stderr)
+            sys.exit(1)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("storybook_viewer_server", str(viewer_server_path))
+        viewer_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(viewer_mod)
+        viewer_mod.run_server(
+            port=getattr(args, "port", 5173),
+            open_browser=not getattr(args, "no_open", False),
+            outputs_dir=getattr(args, "output_dir", "outputs")
+        )
+        sys.exit(0)
 
     # --------------------------------------------------------------------------
     # Dispatch: create
