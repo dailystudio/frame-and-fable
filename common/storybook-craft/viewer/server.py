@@ -248,10 +248,14 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             # Markdown Content
             markdown_content = ""
             markdown_type = "none"
+            clean_stem = re.sub(r'(_zh|_en)$', '', stem)
             candidates = [
                 (ws_dir / f"{stem}-output.md", "output"),
-                (self.examples_dir / f"{stem}.md", "example"),
+                (ws_dir / f"{stem}.md", "workspace"),
                 (self.examples_dir / f"{stem}_crafted.md", "example"),
+                (self.examples_dir / f"{clean_stem}_crafted.md", "example"),
+                (self.examples_dir / f"{stem}.md", "example"),
+                (PROJECT_ROOT / "tests" / f"{stem}.md", "test"),
             ]
             for candidate, mtype in candidates:
                 if candidate.exists():
@@ -271,14 +275,51 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
 
-            # Extract tags
-            tags = []
-            tag_regex = re.compile(r'<!--\s*storybook-media:\s*(\{.*?\})\s*-->', re.DOTALL)
-            for m in tag_regex.finditer(markdown_content):
+            # Extract tags with comprehensive parsing
+            raw_tags = []
+            json_regex = re.compile(r'<!--\s*storybook-media:\s*(\{.*?\})\s*-->', re.DOTALL)
+            for m in json_regex.finditer(markdown_content):
                 try:
-                    tags.append(json.loads(m.group(1)))
+                    t = json.loads(m.group(1))
+                    t["_pos"] = m.start()
+                    raw_tags.append(t)
                 except Exception:
                     pass
+
+            kv_regex = re.compile(r'<!--\s*storybook-media\s+([^>]*?)\s*-->', re.DOTALL)
+            for m in kv_regex.finditer(markdown_content):
+                content = m.group(1).strip()
+                if content.startswith("{") or content.startswith(":"):
+                    continue
+                kv_dict = {"_pos": m.start()}
+                for am in re.finditer(r'(\w+)=["\'](.*?)["\']', content):
+                    kv_dict[am.group(1)] = am.group(2)
+                if kv_dict.get("id") or kv_dict.get("type"):
+                    raw_tags.append(kv_dict)
+
+            raw_tags.sort(key=lambda x: x.get("_pos", 0))
+
+            all_generated = generated_images + generated_videos
+            tags = []
+            for rt in raw_tags:
+                tag_id = rt.get("id", "")
+                tag_type = rt.get("type", "image")
+                matched = next((
+                    a for a in all_generated
+                    if a["id"] == tag_id or
+                    a["name"].startswith(tag_id + ".") or
+                    tag_id in a["name"] or
+                    (rt.get("asset") and a["name"] == Path(rt["asset"]).name)
+                ), None)
+
+                rt_clean = {k: v for k, v in rt.items() if not k.startswith("_")}
+                rt_clean["type"] = tag_type
+                rt_clean["section"] = rt_clean.get("section") or rt_clean.get("title") or "Story Scene"
+                rt_clean["prompt"] = rt_clean.get("prompt", "")
+                rt_clean["context_hint"] = rt_clean.get("context_hint", "")
+                rt_clean["isGenerated"] = matched is not None
+                rt_clean["matchedAsset"] = matched
+                tags.append(rt_clean)
 
             self.send_json_response({
                 "stem": stem,

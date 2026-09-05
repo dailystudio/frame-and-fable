@@ -1,46 +1,46 @@
 <template>
   <div class="style-profile">
-    <div class="section-header">
+    <div class="profile-header">
       <div>
         <h2 class="section-title">Art & Visual Style Profile</h2>
         <p class="section-subtitle">
-          Aesthetic guidelines, prompt modifiers, and visual moodboard references maintaining consistent rendering across all scenes.
+          Art direction guidelines, aesthetic prompt modifiers, and reference moodboard maintaining visual consistency across scenes.
         </p>
       </div>
+
       <div class="header-badges">
-        <span class="md-badge badge-primary">
-          <span class="material-symbols-rounded" style="font-size: 14px;">palette</span>
-          {{ styleData.style_name || 'Custom Style' }}
+        <span class="clean-badge">
+          <span class="material-symbols-rounded">palette</span>
+          {{ styleData.style_name || 'Art Style' }}
         </span>
-        <span class="md-badge">
-          <span class="material-symbols-rounded" style="font-size: 14px;">image</span>
-          {{ styleImages.length }} Style Images
+        <span class="clean-badge">
+          <span class="material-symbols-rounded">image</span>
+          {{ styleImages.length }} Style Photos
         </span>
       </div>
     </div>
 
-    <div class="style-content-grid">
-      <!-- Style Overview Card -->
-      <div class="style-card md-card-elevated">
+    <div class="style-grid">
+      <!-- Style Details Card -->
+      <div class="style-card clean-card">
         <div class="card-head">
-          <span class="material-symbols-rounded head-icon">brush</span>
-          <div>
+          <div class="style-title-group">
             <h3 class="style-name">{{ styleData.style_name || 'Standard Storybook Style' }}</h3>
-            <span class="md-badge badge-source">{{ styleData.source || 'workspace style' }}</span>
+            <span class="clean-badge">{{ styleData.source || 'workspace style' }}</span>
           </div>
         </div>
 
-        <!-- Style Prompt Section -->
-        <div class="prompt-section">
-          <div class="prompt-bar">
+        <!-- Style Prompt -->
+        <div class="prompt-box">
+          <div class="prompt-head">
             <span class="prompt-title">
-              <span class="material-symbols-rounded">magic_button</span>
+              <span class="material-symbols-rounded">auto_awesome</span>
               Art Direction & Aesthetic Prompt
             </span>
             <button
               v-if="styleData.style_prompt"
               type="button"
-              class="md-btn md-btn-tonal copy-btn"
+              class="clean-btn clean-btn-sm"
               @click="copyText(styleData.style_prompt, 'style')"
             >
               <span class="material-symbols-rounded">
@@ -49,26 +49,19 @@
               {{ copiedKey === 'style' ? 'Copied' : 'Copy' }}
             </button>
           </div>
-          <div class="prompt-container">
-            <p v-if="styleData.style_prompt" class="prompt-text">
-              {{ styleData.style_prompt }}
-            </p>
-            <p v-else class="prompt-empty">
-              No style prompt specified yet.
-            </p>
-          </div>
+          <p class="prompt-text">{{ styleData.style_prompt || 'No style prompt specified.' }}</p>
         </div>
 
-        <!-- Reference Prompt Section -->
-        <div v-if="styleData.reference_prompt" class="prompt-section">
-          <div class="prompt-bar">
+        <!-- Reference Environment Prompt -->
+        <div v-if="styleData.reference_prompt" class="prompt-box">
+          <div class="prompt-head">
             <span class="prompt-title">
               <span class="material-symbols-rounded">landscape</span>
               Environment & Reference Generator Prompt
             </span>
             <button
               type="button"
-              class="md-btn md-btn-tonal copy-btn"
+              class="clean-btn clean-btn-sm"
               @click="copyText(styleData.reference_prompt, 'ref')"
             >
               <span class="material-symbols-rounded">
@@ -77,21 +70,16 @@
               {{ copiedKey === 'ref' ? 'Copied' : 'Copy' }}
             </button>
           </div>
-          <div class="prompt-container">
-            <p class="prompt-text">
-              {{ styleData.reference_prompt }}
-            </p>
-          </div>
+          <p class="prompt-text">{{ styleData.reference_prompt }}</p>
         </div>
       </div>
 
       <!-- Style Reference Images Card -->
-      <div class="style-images-card md-card-elevated">
+      <div class="style-images-card clean-card">
         <div class="card-head">
-          <span class="material-symbols-rounded head-icon">collections</span>
           <div>
-            <h3 class="card-title">Style Reference Gallery</h3>
-            <p class="card-desc">Visual moodboard for the image & video generators</p>
+            <h3 class="card-title">Reference Moodboard</h3>
+            <span class="card-sub">Visual references used by image & video generation models</span>
           </div>
         </div>
 
@@ -110,14 +98,14 @@
             />
             <div class="img-overlay">
               <span class="img-name">{{ img }}</span>
-              <span class="material-symbols-rounded zoom-icon">zoom_in</span>
+              <span class="material-symbols-rounded zoom-icon">fullscreen</span>
             </div>
           </div>
         </div>
 
-        <div v-else class="no-images-placeholder">
+        <div v-else class="no-images-box">
           <span class="material-symbols-rounded">image_not_supported</span>
-          <span>No style references yet (drop reference images into <code>outputs/{{ stem }}/style-ref/</code>)</span>
+          <span>No style references yet (drop image into <code>outputs/{{ stem }}/style-ref/</code>)</span>
         </div>
       </div>
     </div>
@@ -181,10 +169,10 @@ async function copyText(text, key) {
 .style-profile {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
-.section-header {
+.profile-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -194,15 +182,15 @@ async function copyText(text, key) {
 
 .section-title {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   font-weight: 700;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
 }
 
 .section-subtitle {
   margin: 0.25rem 0 0 0;
-  font-size: 0.95rem;
-  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
 .header-badges {
@@ -210,77 +198,65 @@ async function copyText(text, key) {
   gap: 0.5rem;
 }
 
-.badge-primary {
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-}
-
-.style-content-grid {
+.style-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
-@media (max-width: 900px) {
-  .style-content-grid {
+@media (max-width: 860px) {
+  .style-grid {
     grid-template-columns: 1fr;
   }
 }
 
 .style-card,
 .style-images-card {
-  padding: 1.5rem;
+  padding: 1.25rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1rem;
 }
 
 .card-head {
   display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.style-title-group {
+  display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
-.head-icon {
-  font-size: 28px;
-  color: var(--md-sys-color-primary);
-  background: var(--md-sys-color-primary-container);
-  padding: 0.5rem;
-  border-radius: var(--shape-corner-medium);
-}
-
-.style-name {
-  margin: 0 0 0.25rem 0;
-  font-size: 1.3rem;
-  font-weight: 700;
-  color: var(--md-sys-color-on-surface);
-}
-
+.style-name,
 .card-title {
-  margin: 0 0 0.2rem 0;
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: var(--md-sys-color-on-surface);
-}
-
-.card-desc {
   margin: 0;
-  font-size: 0.85rem;
-  color: var(--md-sys-color-on-surface-variant);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
-.badge-source {
-  background: var(--md-sys-color-surface-container-highest);
-  color: var(--md-sys-color-on-surface-variant);
+.card-sub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: block;
+  margin-top: 0.15rem;
 }
 
-.prompt-section {
+.prompt-box {
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
-.prompt-bar {
+.prompt-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -289,66 +265,44 @@ async function copyText(text, key) {
 .prompt-title {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8rem;
+  gap: 0.35rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: var(--md-sys-color-primary);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-secondary);
 }
 
 .prompt-title .material-symbols-rounded {
-  font-size: 18px;
-}
-
-.copy-btn {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.75rem;
-  height: 26px;
-}
-
-.prompt-container {
-  background: var(--md-sys-color-surface-container);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--shape-corner-medium);
-  padding: 1rem;
+  font-size: 15px;
 }
 
 .prompt-text {
   margin: 0;
-  font-size: 0.9rem;
-  line-height: 1.6;
-  color: var(--md-sys-color-on-surface);
-  white-space: pre-wrap;
-}
-
-.prompt-empty {
-  margin: 0;
   font-size: 0.85rem;
-  font-style: italic;
-  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-wrap;
 }
 
 .style-images-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
 .style-image-wrap {
   position: relative;
   aspect-ratio: 4/3;
-  border-radius: var(--shape-corner-medium);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--border-default);
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.15s, transform 0.15s;
 }
 
 .style-image-wrap:hover {
-  transform: scale(1.03);
-  box-shadow: var(--elevation-2);
+  border-color: var(--accent-primary);
+  transform: scale(1.02);
 }
 
 .style-img {
@@ -361,22 +315,17 @@ async function copyText(text, key) {
 .img-overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 60%);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, transparent 60%);
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  padding: 0.5rem;
+  padding: 0.4rem;
   color: #fff;
   opacity: 0.85;
-  transition: opacity 0.2s;
-}
-
-.style-image-wrap:hover .img-overlay {
-  opacity: 1;
 }
 
 .img-name {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -385,17 +334,17 @@ async function copyText(text, key) {
 }
 
 .zoom-icon {
-  font-size: 20px;
+  font-size: 18px;
 }
 
-.no-images-placeholder {
+.no-images-box {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 2rem 1rem;
-  border-radius: var(--shape-corner-medium);
-  border: 1px dashed var(--md-sys-color-outline-variant);
-  color: var(--md-sys-color-on-surface-variant);
+  gap: 0.4rem;
+  padding: 1.5rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-default);
+  color: var(--text-muted);
   font-size: 0.85rem;
   justify-content: center;
 }

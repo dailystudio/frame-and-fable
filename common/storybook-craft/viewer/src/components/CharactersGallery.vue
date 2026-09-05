@@ -1,101 +1,105 @@
 <template>
   <div class="characters-gallery">
-    <div class="section-header">
+    <!-- Header -->
+    <div class="gallery-header">
       <div>
         <h2 class="section-title">Character Visual References</h2>
         <p class="section-subtitle">
-          Visual DNA, portrait prompts, and multi-angle reference portraits for consistent multi-shot generation.
+          Visual DNA, portrait prompts, and multi-angle reference photos ensuring character consistency across storybook scenes.
         </p>
       </div>
+
       <div class="header-badges">
-        <span class="md-badge badge-primary">
-          <span class="material-symbols-rounded" style="font-size: 14px;">face</span>
+        <span class="clean-badge">
+          <span class="material-symbols-rounded">face</span>
           {{ characters.length }} Characters
         </span>
-        <span class="md-badge">
-          <span class="material-symbols-rounded" style="font-size: 14px;">photo_library</span>
-          {{ totalRefImages }} Reference Images
+        <span class="clean-badge">
+          <span class="material-symbols-rounded">photo_library</span>
+          {{ totalRefImages }} Reference Photos
         </span>
       </div>
     </div>
 
-    <div v-if="characters.length === 0" class="empty-state">
+    <!-- Empty State -->
+    <div v-if="characters.length === 0" class="empty-state clean-card">
       <span class="material-symbols-rounded empty-icon">person_off</span>
-      <p>No character references found in this workspace.</p>
-      <small>Run <code>python storybook.py assets &lt;file.md&gt;</code> to extract characters.</small>
+      <h3>No Characters Extracted</h3>
+      <p>Run <code>python storybook.py assets &lt;story.md&gt;</code> to extract characters into this workspace.</p>
     </div>
 
+    <!-- Grid -->
     <div v-else class="character-grid">
       <div
         v-for="char in characters"
         :key="char.name"
-        class="char-card md-card-elevated"
+        class="char-card clean-card"
       >
-        <div class="char-header">
-          <div class="char-title-wrap">
+        <div class="char-top">
+          <div class="char-title-group">
             <h3 class="char-name">{{ char.name }}</h3>
             <div class="char-chips">
-              <span class="md-badge badge-role">{{ char.role || 'Character' }}</span>
-              <span v-if="char.source" class="md-badge badge-source">{{ char.source }}</span>
+              <span class="clean-badge role-badge">{{ char.role || 'Character' }}</span>
+              <span v-if="char.source" class="clean-badge source-badge">{{ char.source }}</span>
             </div>
           </div>
-          <span class="char-ref-count">
-            {{ char.images?.length || 0 }} images
+          <span class="photo-count-pill">
+            {{ char.images?.length || 0 }} photos
           </span>
         </div>
 
-        <!-- Visual DNA Section -->
-        <div v-if="char.visual_dna" class="char-dna-block">
-          <div class="dna-label">
-            <span class="material-symbols-rounded icon-dna">fingerprint</span>
-            Visual DNA
+        <!-- Visual DNA -->
+        <div v-if="char.visual_dna" class="dna-box">
+          <div class="dna-head">
+            <span class="material-symbols-rounded dna-icon">fingerprint</span>
+            <span>Visual DNA</span>
           </div>
-          <p class="dna-text">{{ char.visual_dna }}</p>
+          <p class="dna-content">{{ char.visual_dna }}</p>
         </div>
 
-        <!-- Portrait Prompt Section -->
-        <div v-if="char.portrait_prompt" class="char-prompt-block">
+        <!-- Portrait Prompt -->
+        <div v-if="char.portrait_prompt" class="prompt-box">
           <div class="prompt-head">
-            <span class="prompt-title">
-              <span class="material-symbols-rounded icon-prompt">auto_awesome</span>
-              Portrait Prompt
-            </span>
+            <div class="prompt-title">
+              <span class="material-symbols-rounded prompt-icon">auto_awesome</span>
+              <span>Portrait Prompt</span>
+            </div>
             <button
               type="button"
-              class="md-btn md-btn-tonal copy-btn"
-              @click="copyText(char.portrait_prompt, char.name)"
+              class="clean-btn clean-btn-sm"
+              @click="copyPrompt(char.portrait_prompt, char.name)"
             >
               <span class="material-symbols-rounded">
-                {{ copiedChar === char.name ? 'check' : 'content_copy' }}
+                {{ copiedName === char.name ? 'check' : 'content_copy' }}
               </span>
-              {{ copiedChar === char.name ? 'Copied' : 'Copy' }}
+              {{ copiedName === char.name ? 'Copied' : 'Copy' }}
             </button>
           </div>
-          <p class="prompt-content">{{ char.portrait_prompt }}</p>
+          <p class="prompt-text">{{ char.portrait_prompt }}</p>
         </div>
 
-        <!-- Reference Images Gallery -->
-        <div class="char-images-section">
-          <h4 class="images-heading">Reference Photos</h4>
-          <div v-if="char.images && char.images.length > 0" class="images-strip">
+        <!-- Photos -->
+        <div class="photos-section">
+          <span class="photos-label">Reference Portraits</span>
+          <div v-if="char.images && char.images.length" class="photos-grid">
             <div
               v-for="img in char.images"
               :key="img"
-              class="image-thumb-wrap"
+              class="photo-wrap"
               @click="previewImage(char, img)"
             >
               <img
                 :src="getImageUrl(char.name, img)"
                 :alt="`${char.name} - ${img}`"
-                class="image-thumb"
+                class="photo-img"
                 loading="lazy"
               />
-              <span class="image-label">{{ img }}</span>
+              <span class="photo-name">{{ img }}</span>
             </div>
           </div>
-          <div v-else class="no-images-placeholder">
+          <div v-else class="no-photos-box">
             <span class="material-symbols-rounded">image_not_supported</span>
-            <span>No reference images yet (add ref_001.png to char-ref/{{ char.name }}/)</span>
+            <span>No reference images yet (place in <code>char-ref/{{ char.name }}/</code>)</span>
           </div>
         </div>
       </div>
@@ -104,7 +108,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { ref, computed } from 'vue';
 import { getCharImageUrl } from '../services/api';
 
 const props = defineProps({
@@ -120,7 +124,7 @@ const props = defineProps({
 
 const emit = defineEmits(['preview']);
 
-const copiedChar = ref(null);
+const copiedName = ref(null);
 
 const totalRefImages = computed(() => {
   return props.characters.reduce((acc, c) => acc + (c.images?.length || 0), 0);
@@ -144,15 +148,16 @@ function previewImage(char, img) {
   });
 }
 
-async function copyText(text, charName) {
+async function copyPrompt(prompt, name) {
+  if (!prompt) return;
   try {
-    await navigator.clipboard.writeText(text);
-    copiedChar.value = charName;
+    await navigator.clipboard.writeText(prompt);
+    copiedName.value = name;
     setTimeout(() => {
-      copiedChar.value = null;
+      copiedName.value = null;
     }, 2000);
-  } catch (err) {
-    console.error('Failed to copy:', err);
+  } catch (e) {
+    console.error('Clipboard copy failed:', e);
   }
 }
 </script>
@@ -161,10 +166,10 @@ async function copyText(text, charName) {
 .characters-gallery {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
-.section-header {
+.gallery-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -174,15 +179,15 @@ async function copyText(text, charName) {
 
 .section-title {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   font-weight: 700;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
 }
 
 .section-subtitle {
   margin: 0.25rem 0 0 0;
-  font-size: 0.95rem;
-  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
 .header-badges {
@@ -190,217 +195,190 @@ async function copyText(text, charName) {
   gap: 0.5rem;
 }
 
-.badge-primary {
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-}
-
 .character-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 1.25rem;
 }
 
 .char-card {
-  padding: 1.5rem;
+  padding: 1.25rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  gap: 1rem;
 }
 
-.char-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--elevation-3);
-}
-
-.char-header {
+.char-top {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
 }
 
 .char-name {
-  margin: 0 0 0.4rem 0;
-  font-size: 1.35rem;
+  margin: 0 0 0.35rem 0;
+  font-size: 1.2rem;
   font-weight: 700;
-  color: var(--md-sys-color-primary);
+  color: var(--text-primary);
 }
 
 .char-chips {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
   flex-wrap: wrap;
 }
 
-.badge-role {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+.role-badge {
+  background: var(--bg-surface-secondary);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
-.badge-source {
-  background: var(--md-sys-color-surface-variant);
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.char-ref-count {
-  font-size: 0.8rem;
+.photo-count-pill {
+  font-size: 0.75rem;
   font-weight: 600;
-  color: var(--md-sys-color-on-surface-variant);
-  background: var(--md-sys-color-surface-container-high);
-  padding: 0.25rem 0.6rem;
-  border-radius: var(--shape-corner-full);
+  color: var(--text-secondary);
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-full);
 }
 
-.char-dna-block {
-  background: var(--md-sys-color-surface-container);
-  padding: 0.85rem 1rem;
-  border-radius: var(--shape-corner-medium);
-  border-left: 3px solid var(--md-sys-color-primary);
+.dna-box {
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
 }
 
-.dna-label {
+.dna-head {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  gap: 0.35rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: var(--md-sys-color-primary);
-  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  margin-bottom: 0.3rem;
 }
 
-.icon-dna {
-  font-size: 16px;
+.dna-icon {
+  font-size: 15px;
 }
 
-.dna-text {
+.dna-content {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
 }
 
-.char-prompt-block {
-  background: var(--md-sys-color-surface-container-high);
-  padding: 0.85rem 1rem;
-  border-radius: var(--shape-corner-medium);
+.prompt-box {
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
 }
 
 .prompt-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.35rem;
 }
 
 .prompt-title {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  gap: 0.35rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: var(--md-sys-color-secondary);
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
-.icon-prompt {
-  font-size: 16px;
+.prompt-icon {
+  font-size: 15px;
 }
 
-.copy-btn {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
-  height: 26px;
-}
-
-.prompt-content {
+.prompt-text {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   line-height: 1.45;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
   white-space: pre-wrap;
-  font-family: var(--font-sans);
 }
 
-.char-images-section {
+.photos-section {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.images-heading {
-  margin: 0;
-  font-size: 0.85rem;
+.photos-label {
+  font-size: 0.72rem;
   font-weight: 600;
-  color: var(--md-sys-color-on-surface-variant);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 
-.images-strip {
+.photos-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 0.5rem;
 }
 
-.image-thumb-wrap {
+.photo-wrap {
   position: relative;
-  border-radius: var(--shape-corner-medium);
-  overflow: hidden;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
   aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-default);
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.15s, transform 0.15s;
 }
 
-.image-thumb-wrap:hover {
-  transform: scale(1.04);
-  box-shadow: var(--elevation-2);
+.photo-wrap:hover {
+  border-color: var(--accent-primary);
+  transform: scale(1.03);
 }
 
-.image-thumb {
+.photo-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.image-label {
+.photo-name {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(0, 0, 0, 0.65);
-  color: #ffffff;
-  font-size: 0.7rem;
-  padding: 0.2rem 0.35rem;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.65rem;
+  padding: 0.15rem 0.3rem;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  backdrop-filter: blur(4px);
 }
 
-.no-images-placeholder {
+.no-photos-box {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 1rem;
-  border-radius: var(--shape-corner-medium);
-  border: 1px dashed var(--md-sys-color-outline-variant);
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 0.85rem;
+  gap: 0.4rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-default);
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .empty-state {
   text-align: center;
   padding: 4rem 2rem;
-  color: var(--md-sys-color-on-surface-variant);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -408,7 +386,7 @@ async function copyText(text, charName) {
 }
 
 .empty-icon {
-  font-size: 48px;
-  color: var(--md-sys-color-outline);
+  font-size: 40px;
+  color: var(--text-muted);
 }
 </style>

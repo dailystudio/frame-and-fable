@@ -1,160 +1,149 @@
 <template>
-  <div class="app-layout">
-    <!-- Top App Bar -->
-    <header class="md-top-app-bar">
-      <div class="app-brand">
-        <span class="material-symbols-rounded brand-icon">auto_stories</span>
-        <div class="brand-text">
-          <h1 class="brand-title">Storybook Craft</h1>
-          <span class="brand-subtitle">Asset & Output Inspector</span>
-        </div>
-      </div>
+  <div class="app-shell">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-container">
+        <div class="header-left">
+          <div class="brand">
+            <span class="material-symbols-rounded brand-symbol">menu_book</span>
+            <span class="brand-name">Storybook Craft</span>
+          </div>
 
-      <!-- Workspace Selector in App Bar -->
-      <div class="workspace-selector-wrap">
-        <label for="workspace-select" class="selector-label">Workspace:</label>
-        <div class="select-container">
-          <select
-            id="workspace-select"
-            v-model="selectedStem"
-            class="workspace-select"
+          <!-- Workspace Selector -->
+          <div class="workspace-selector">
+            <label for="ws-select" class="ws-label">Workspace:</label>
+            <div class="select-box">
+              <select
+                id="ws-select"
+                v-model="selectedStem"
+                class="clean-select ws-dropdown"
+                :disabled="loading"
+                @change="loadCurrentWorkspace"
+              >
+                <option v-for="ws in workspaces" :key="ws.stem" :value="ws.stem">
+                  {{ ws.stem }}
+                </option>
+              </select>
+              <span class="material-symbols-rounded select-arrow">expand_more</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <!-- Refresh -->
+          <button
+            type="button"
+            class="clean-icon-btn"
+            title="Reload workspace"
             :disabled="loading"
-            @change="loadCurrentWorkspace"
+            @click="refreshData"
           >
-            <option v-for="ws in workspaces" :key="ws.stem" :value="ws.stem">
-              {{ ws.stem }} ({{ ws.charactersCount }} chars, {{ ws.generatedImagesCount + ws.generatedVideosCount }} media)
-            </option>
-          </select>
-          <span class="material-symbols-rounded select-arrow">arrow_drop_down</span>
+            <span class="material-symbols-rounded" :class="{ 'is-spinning': loading }">refresh</span>
+          </button>
+
+          <!-- Theme Toggle -->
+          <button
+            type="button"
+            class="clean-icon-btn"
+            :title="isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme'"
+            @click="toggleTheme"
+          >
+            <span class="material-symbols-rounded">
+              {{ isDark ? 'light_mode' : 'dark_mode' }}
+            </span>
+          </button>
         </div>
       </div>
 
-      <div class="app-bar-actions">
-        <!-- Quick stats -->
-        <div v-if="workspaceData" class="quick-stats-bar">
-          <span class="stat-pill" title="Characters">
-            <span class="material-symbols-rounded">face</span>
-            {{ workspaceData.characters?.length || 0 }}
-          </span>
-          <span class="stat-pill" title="Generated Media">
-            <span class="material-symbols-rounded">perm_media</span>
-            {{ (workspaceData.generatedImages?.length || 0) + (workspaceData.generatedVideos?.length || 0) }}
-          </span>
+      <!-- Segmented Tab Navigation -->
+      <nav class="nav-tabs-bar">
+        <div class="nav-tabs-container">
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: currentTab === 'reader' }"
+            @click="currentTab = 'reader'"
+          >
+            <span class="material-symbols-rounded tab-icon">auto_stories</span>
+            <span>Story Reader</span>
+          </button>
+
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: currentTab === 'tags' }"
+            @click="currentTab = 'tags'"
+          >
+            <span class="material-symbols-rounded tab-icon">local_offer</span>
+            <span>Media Tags</span>
+            <span v-if="workspaceData?.tags?.length" class="tab-badge">
+              {{ workspaceData.tags.length }}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: currentTab === 'characters' }"
+            @click="currentTab = 'characters'"
+          >
+            <span class="material-symbols-rounded tab-icon">face</span>
+            <span>Characters</span>
+            <span v-if="workspaceData?.characters?.length" class="tab-badge">
+              {{ workspaceData.characters.length }}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: currentTab === 'style' }"
+            @click="currentTab = 'style'"
+          >
+            <span class="material-symbols-rounded tab-icon">palette</span>
+            <span>Art Style</span>
+            <span v-if="workspaceData?.style?.images?.length" class="tab-badge">
+              {{ workspaceData.style.images.length }}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: currentTab === 'media' }"
+            @click="currentTab = 'media'"
+          >
+            <span class="material-symbols-rounded tab-icon">photo_library</span>
+            <span>Asset Files</span>
+            <span v-if="totalMediaCount" class="tab-badge">
+              {{ totalMediaCount }}
+            </span>
+          </button>
         </div>
-
-        <!-- Reload Data -->
-        <button
-          type="button"
-          class="md-icon-btn"
-          title="Reload workspace"
-          :disabled="loading"
-          @click="refreshData"
-        >
-          <span class="material-symbols-rounded" :class="{ 'spin-anim': loading }">refresh</span>
-        </button>
-
-        <!-- Theme Toggle -->
-        <button
-          type="button"
-          class="md-icon-btn"
-          :title="isDark ? 'Switch to Light theme' : 'Switch to Dark theme'"
-          @click="toggleTheme"
-        >
-          <span class="material-symbols-rounded">
-            {{ isDark ? 'light_mode' : 'dark_mode' }}
-          </span>
-        </button>
-      </div>
+      </nav>
     </header>
 
-    <div class="app-body">
-      <!-- Navigation Rail / Bar -->
-      <nav class="md-nav-rail">
-        <button
-          type="button"
-          class="nav-tab-btn"
-          :class="{ active: currentTab === 'reader' }"
-          @click="currentTab = 'reader'"
-        >
-          <span class="material-symbols-rounded nav-icon">menu_book</span>
-          <span class="nav-label">Reader</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-tab-btn"
-          :class="{ active: currentTab === 'characters' }"
-          @click="currentTab = 'characters'"
-        >
-          <span class="material-symbols-rounded nav-icon">face</span>
-          <span class="nav-label">Characters</span>
-          <span v-if="workspaceData?.characters?.length" class="nav-badge">
-            {{ workspaceData.characters.length }}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-tab-btn"
-          :class="{ active: currentTab === 'style' }"
-          @click="currentTab = 'style'"
-        >
-          <span class="material-symbols-rounded nav-icon">palette</span>
-          <span class="nav-label">Style</span>
-          <span v-if="workspaceData?.style?.images?.length" class="nav-badge">
-            {{ workspaceData.style.images.length }}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-tab-btn"
-          :class="{ active: currentTab === 'media' }"
-          @click="currentTab = 'media'"
-        >
-          <span class="material-symbols-rounded nav-icon">photo_library</span>
-          <span class="nav-label">Media</span>
-          <span v-if="totalMediaCount" class="nav-badge">
-            {{ totalMediaCount }}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-tab-btn"
-          :class="{ active: currentTab === 'breakdown' }"
-          @click="currentTab = 'breakdown'"
-        >
-          <span class="material-symbols-rounded nav-icon">list_alt</span>
-          <span class="nav-label">Scenes</span>
-          <span v-if="workspaceData?.tags?.length" class="nav-badge">
-            {{ workspaceData.tags.length }}
-          </span>
-        </button>
-      </nav>
-
-      <!-- Main Content Stage -->
-      <main class="main-content-area">
+    <!-- Main Content Area -->
+    <main class="app-main">
+      <div class="content-container">
         <!-- Error Alert -->
-        <div v-if="errorMessage" class="error-banner md-card-elevated">
-          <span class="material-symbols-rounded error-icon">error</span>
-          <div class="error-msg">
-            <strong>Failed to load:</strong> {{ errorMessage }}
-          </div>
-          <button type="button" class="md-btn md-btn-tonal" @click="loadCurrentWorkspace">
+        <div v-if="errorMessage" class="error-banner clean-card">
+          <span class="material-symbols-rounded error-icon">error_outline</span>
+          <span class="error-text">{{ errorMessage }}</span>
+          <button type="button" class="clean-btn clean-btn-sm" @click="loadCurrentWorkspace">
             Retry
           </button>
         </div>
 
-        <!-- Loading Skeleton -->
-        <div v-if="loading" class="loading-container">
-          <div class="loading-spinner"></div>
-          <p class="loading-text">Loading workspace <strong>{{ selectedStem }}</strong>...</p>
+        <!-- Loading State -->
+        <div v-if="loading" class="loading-state">
+          <div class="clean-spinner"></div>
+          <p class="loading-label">Loading workspace <strong>{{ selectedStem }}</strong>...</p>
         </div>
 
-        <!-- Active View -->
-        <div v-else-if="workspaceData" class="view-content">
-          <!-- 1. Story Reader Tab -->
+        <!-- Tab Views -->
+        <div v-else-if="workspaceData" class="view-wrapper">
+          <!-- 1. Story Reader -->
           <StoryReader
             v-if="currentTab === 'reader'"
             :stem="selectedStem"
@@ -166,7 +155,17 @@
             @preview="openPreview"
           />
 
-          <!-- 2. Characters Tab -->
+          <!-- 2. Media Tags Review (Image & Video) -->
+          <MediaTagsReview
+            v-else-if="currentTab === 'tags'"
+            :stem="selectedStem"
+            :tags="workspaceData.tags"
+            :images="workspaceData.generatedImages"
+            :videos="workspaceData.generatedVideos"
+            @preview="openPreview"
+          />
+
+          <!-- 3. Characters -->
           <CharactersGallery
             v-else-if="currentTab === 'characters'"
             :stem="selectedStem"
@@ -174,7 +173,7 @@
             @preview="openPreview"
           />
 
-          <!-- 3. Style Tab -->
+          <!-- 4. Style Profile -->
           <StyleProfile
             v-else-if="currentTab === 'style'"
             :stem="selectedStem"
@@ -182,7 +181,7 @@
             @preview="openPreview"
           />
 
-          <!-- 4. Generated Media Tab -->
+          <!-- 5. Asset Files Gallery -->
           <MediaGallery
             v-else-if="currentTab === 'media'"
             :stem="selectedStem"
@@ -191,25 +190,16 @@
             :tags="workspaceData.tags"
             @preview="openPreview"
           />
-
-          <!-- 5. Scene Breakdown Tab -->
-          <SceneBreakdown
-            v-else-if="currentTab === 'breakdown'"
-            :stem="selectedStem"
-            :tags="workspaceData.tags"
-            :images="workspaceData.generatedImages"
-            :videos="workspaceData.generatedVideos"
-            @preview="openPreview"
-          />
         </div>
 
-        <div v-else class="no-workspace-state">
-          <span class="material-symbols-rounded empty-icon">folder_off</span>
-          <h3>No Workspaces Found in <code>outputs/</code></h3>
-          <p>Run storybook commands to generate workspaces and review output results.</p>
+        <!-- No Workspaces Found -->
+        <div v-else class="empty-state clean-card">
+          <span class="material-symbols-rounded empty-icon">folder_open</span>
+          <h3>No Workspaces Found</h3>
+          <p>Generate workspaces in <code>outputs/</code> to inspect characters, media tags, and stories.</p>
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
 
     <!-- Global Image / Video Lightbox -->
     <ImageLightbox ref="lightboxRef" />
@@ -220,16 +210,16 @@
 import { ref, computed, onMounted } from 'vue';
 import { getWorkspaces, getWorkspace } from './services/api';
 import StoryReader from './components/StoryReader.vue';
+import MediaTagsReview from './components/MediaTagsReview.vue';
 import CharactersGallery from './components/CharactersGallery.vue';
 import StyleProfile from './components/StyleProfile.vue';
 import MediaGallery from './components/MediaGallery.vue';
-import SceneBreakdown from './components/SceneBreakdown.vue';
 import ImageLightbox from './components/ImageLightbox.vue';
 
 const workspaces = ref([]);
 const selectedStem = ref('');
 const workspaceData = ref(null);
-const currentTab = ref('reader'); // 'reader' | 'characters' | 'style' | 'media' | 'breakdown'
+const currentTab = ref('tags'); // Default to 'tags' or 'reader' for instant inspection
 const loading = ref(true);
 const errorMessage = ref('');
 const isDark = ref(false);
@@ -247,7 +237,6 @@ async function initWorkspaces() {
     const list = await getWorkspaces();
     workspaces.value = list;
     if (list.length > 0) {
-      // Pick first or restore from localStorage
       const savedStem = localStorage.getItem('storybook_selected_workspace');
       const found = list.find(w => w.stem === savedStem);
       selectedStem.value = found ? found.stem : list[0].stem;
@@ -312,136 +301,227 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.app-layout {
+.app-shell {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background-color: var(--md-sys-color-background);
-  color: var(--md-sys-color-on-background);
+  background-color: var(--bg-app);
+  color: var(--text-primary);
 }
 
-/* Top App Bar */
-.md-top-app-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1.5rem;
-  background-color: var(--md-sys-color-surface-container);
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+/* Header */
+.app-header {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
   position: sticky;
   top: 0;
   z-index: 50;
-  box-shadow: var(--elevation-1);
+  box-shadow: var(--shadow-xs);
+}
+
+.header-container {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 1rem;
 }
 
-.app-brand {
+.header-left {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 1.5rem;
+  flex-wrap: wrap;
 }
 
-.brand-icon {
-  font-size: 30px;
-  color: var(--md-sys-color-primary);
-  background: var(--md-sys-color-primary-container);
-  padding: 0.35rem;
-  border-radius: var(--shape-corner-medium);
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.brand-title {
-  margin: 0;
-  font-size: 1.15rem;
+.brand-symbol {
+  font-size: 22px;
+  color: var(--accent-primary);
+}
+
+.brand-name {
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
 }
 
-.brand-subtitle {
-  font-size: 0.75rem;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.workspace-selector-wrap {
+.workspace-selector {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  flex: 1;
-  max-width: 480px;
+  gap: 0.5rem;
 }
 
-.selector-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.select-container {
-  position: relative;
-  flex: 1;
-}
-
-.workspace-select {
-  width: 100%;
-  appearance: none;
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-  border: 1px solid var(--md-sys-color-outline);
-  border-radius: var(--shape-corner-medium);
-  padding: 0.5rem 2.2rem 0.5rem 0.85rem;
-  font-family: var(--font-sans);
-  font-size: 0.9rem;
+.ws-label {
+  font-size: 0.8rem;
   font-weight: 500;
-  cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  color: var(--text-secondary);
 }
 
-.workspace-select:focus {
-  outline: none;
-  border-color: var(--md-sys-color-primary);
-  box-shadow: 0 0 0 2px var(--md-sys-color-primary-container);
+.select-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ws-dropdown {
+  appearance: none;
+  padding-right: 2rem;
+  font-weight: 600;
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+  min-width: 200px;
 }
 
 .select-arrow {
   position: absolute;
-  right: 0.5rem;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 0.4rem;
   pointer-events: none;
-  color: var(--md-sys-color-on-surface-variant);
+  font-size: 18px;
+  color: var(--text-muted);
 }
 
-.app-bar-actions {
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Segmented Tabs Bar */
+.nav-tabs-bar {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.nav-tabs-container {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+}
+
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.65rem 0.9rem;
+  border: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.tab-icon {
+  font-size: 17px;
+}
+
+.tab-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--badge-bg);
+  color: var(--badge-text);
+  border: 1px solid var(--badge-border);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-full);
+}
+
+.tab-btn.active .tab-badge {
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary-text);
+  border-color: transparent;
+}
+
+/* Main Area */
+.app-main {
+  flex: 1;
+  padding: 1.75rem 0;
+}
+
+.content-container {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.error-banner {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+  margin-bottom: 1.25rem;
+  font-size: 0.85rem;
 }
 
-.quick-stats-bar {
+[data-theme="dark"] .error-banner {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+}
+
+.error-icon {
+  font-size: 20px;
+}
+
+.error-text {
+  flex: 1;
+}
+
+.loading-state {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
+  justify-content: center;
+  padding: 6rem 1rem;
+  gap: 1rem;
 }
 
-.stat-pill {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  background: var(--md-sys-color-surface-container-highest);
-  padding: 0.25rem 0.6rem;
-  border-radius: var(--shape-corner-full);
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--md-sys-color-on-surface);
+.clean-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-default);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
-.stat-pill .material-symbols-rounded {
-  font-size: 16px;
-  color: var(--md-sys-color-primary);
+.loading-label {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
-.spin-anim {
-  animation: spin 1s linear infinite;
+.is-spinning {
+  animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
@@ -449,166 +529,28 @@ onMounted(() => {
   to { transform: rotate(360deg); }
 }
 
-/* App Body */
-.app-body {
-  display: flex;
-  flex: 1;
-}
-
-/* Navigation Rail */
-.md-nav-rail {
-  width: 96px;
-  background-color: var(--md-sys-color-surface-container-low);
-  border-right: 1px solid var(--md-sys-color-outline-variant);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 1rem 0;
-  gap: 0.75rem;
-  flex-shrink: 0;
-}
-
-.nav-tab-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 76px;
-  height: 64px;
-  border: none;
-  background: transparent;
-  border-radius: var(--shape-corner-large);
-  cursor: pointer;
-  position: relative;
-  transition: background-color 0.2s, color 0.2s;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.nav-tab-btn:hover {
-  background-color: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface);
-}
-
-.nav-tab-btn.active {
-  background-color: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-  font-weight: 700;
-}
-
-.nav-icon {
-  font-size: 24px;
-  margin-bottom: 2px;
-}
-
-.nav-label {
-  font-size: 0.72rem;
-  letter-spacing: 0.02em;
-}
-
-.nav-badge {
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  background: var(--md-sys-color-primary);
-  color: var(--md-sys-color-on-primary);
-  font-size: 0.65rem;
-  font-weight: 700;
-  padding: 0.1rem 0.35rem;
-  border-radius: var(--shape-corner-full);
-}
-
-/* Main Content Area */
-.main-content-area {
-  flex: 1;
-  padding: 2rem;
-  max-width: 1400px;
-  margin: 0 auto;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-@media (max-width: 768px) {
-  .app-body {
-    flex-direction: column;
-  }
-  .md-nav-rail {
-    width: 100%;
-    height: auto;
-    flex-direction: row;
-    justify-content: space-around;
-    padding: 0.5rem;
-    border-right: none;
-    border-bottom: 1px solid var(--md-sys-color-outline-variant);
-  }
-  .nav-tab-btn {
-    width: 60px;
-    height: 52px;
-  }
-  .main-content-area {
-    padding: 1rem;
-  }
-}
-
-.error-banner {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  background: #fee2e2;
-  color: #991b1b;
-  padding: 1rem 1.25rem;
-  border-radius: var(--shape-corner-medium);
-  margin-bottom: 1.5rem;
-}
-
-[data-theme="dark"] .error-banner {
-  background: #450a0a;
-  color: #fca5a5;
-}
-
-.error-icon {
-  font-size: 24px;
-}
-
-.error-msg {
-  flex: 1;
-}
-
-.loading-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 5rem 1rem;
-  gap: 1.25rem;
-}
-
-.loading-spinner {
-  width: 44px;
-  height: 44px;
-  border: 4px solid var(--md-sys-color-surface-container-highest);
-  border-top-color: var(--md-sys-color-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.loading-text {
-  font-size: 1rem;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.no-workspace-state {
+.empty-state {
   text-align: center;
-  padding: 6rem 2rem;
-  color: var(--md-sys-color-on-surface-variant);
+  padding: 4rem 2rem;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.75rem;
 }
 
-.no-workspace-state code {
-  background: var(--md-sys-color-surface-container-high);
-  padding: 0.2rem 0.4rem;
-  border-radius: var(--shape-corner-small);
+.empty-icon {
+  font-size: 40px;
+  color: var(--text-muted);
+}
+
+.empty-state h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
 }
 </style>

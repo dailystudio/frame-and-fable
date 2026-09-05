@@ -1,21 +1,23 @@
 <template>
   <div class="story-reader">
-    <div class="reader-toolbar">
-      <div class="reader-meta">
-        <span class="md-badge badge-type">
-          <span class="material-symbols-rounded" style="font-size: 14px;">menu_book</span>
-          {{ markdownType === 'output' ? 'Generated Output' : 'Source Draft' }}
+    <!-- Toolbar -->
+    <div class="reader-toolbar clean-card">
+      <div class="toolbar-meta">
+        <span class="clean-badge">
+          <span class="material-symbols-rounded">menu_book</span>
+          {{ markdownType === 'output' ? 'Generated Output' : 'Story Document' }}
         </span>
-        <span class="read-stat">{{ wordCount }} words</span>
-        <span class="read-stat">{{ readTime }} min read</span>
+        <span class="stat-pill">{{ wordCount }} words</span>
+        <span class="stat-pill">{{ readTime }} min read</span>
       </div>
 
-      <div class="reader-actions">
-        <div class="font-size-control">
+      <div class="toolbar-actions">
+        <!-- Font Size Controls -->
+        <div class="font-stepper">
           <button
             type="button"
-            class="size-btn"
-            title="Smaller font"
+            class="stepper-btn"
+            title="Smaller text"
             :disabled="fontSizeMultiplier <= 0.85"
             @click="fontSizeMultiplier -= 0.1"
           >
@@ -23,16 +25,16 @@
           </button>
           <button
             type="button"
-            class="size-btn"
-            title="Reset font"
+            class="stepper-btn"
+            title="Reset text size"
             @click="fontSizeMultiplier = 1.0"
           >
             A
           </button>
           <button
             type="button"
-            class="size-btn"
-            title="Larger font"
+            class="stepper-btn"
+            title="Larger text"
             :disabled="fontSizeMultiplier >= 1.4"
             @click="fontSizeMultiplier += 0.1"
           >
@@ -42,42 +44,42 @@
 
         <button
           type="button"
-          class="md-btn md-btn-tonal raw-toggle"
+          class="clean-btn clean-btn-sm"
           @click="showRaw = !showRaw"
         >
           <span class="material-symbols-rounded">
-            {{ showRaw ? 'visibility' : 'code' }}
+            {{ showRaw ? 'menu_book' : 'code' }}
           </span>
-          {{ showRaw ? 'Formatted Story' : 'Raw Markdown' }}
+          {{ showRaw ? 'Story View' : 'Raw Markdown' }}
         </button>
       </div>
     </div>
 
-    <!-- Empty state -->
-    <div v-if="!markdownContent" class="empty-state">
+    <!-- Empty State -->
+    <div v-if="!markdownContent" class="empty-state clean-card">
       <span class="material-symbols-rounded empty-icon">menu_book</span>
-      <p>No story markdown found for this workspace.</p>
-      <small>Ensure <code>{{ stem }}-output.md</code> exists in <code>outputs/{{ stem }}/</code>.</small>
+      <h3>No Story Text Found</h3>
+      <p>Ensure <code>{{ stem }}-output.md</code> exists in <code>outputs/{{ stem }}/</code>.</p>
     </div>
 
     <!-- Raw Markdown View -->
-    <div v-else-if="showRaw" class="raw-markdown-view md-card-elevated">
-      <div class="raw-head">
-        <span class="raw-title">{{ stem }}-output.md</span>
-        <button type="button" class="md-btn md-btn-tonal" @click="copyRaw">
+    <div v-else-if="showRaw" class="raw-box clean-card">
+      <div class="raw-top">
+        <span class="raw-file-name">{{ stem }}-output.md</span>
+        <button type="button" class="clean-btn clean-btn-sm" @click="copyRaw">
           <span class="material-symbols-rounded">
             {{ rawCopied ? 'check' : 'content_copy' }}
           </span>
-          {{ rawCopied ? 'Copied' : 'Copy All' }}
+          {{ rawCopied ? 'Copied' : 'Copy Text' }}
         </button>
       </div>
       <pre><code>{{ markdownContent }}</code></pre>
     </div>
 
-    <!-- Formatted Story Reader View -->
+    <!-- Formatted Story Reading View -->
     <div
       v-else
-      class="reader-paper md-card-elevated"
+      class="story-sheet clean-card"
       :style="{ '--reader-font-scale': fontSizeMultiplier }"
       @click="handleContentClick"
     >
@@ -138,20 +140,18 @@ const renderedHtml = computed(() => {
 
   let text = props.markdownContent;
 
-  // 1. Replace relative image markdown links:
-  // e.g. ![alt](images/foo.png) -> !alt](/api/asset/<stem>/images/foo.png)
+  // 1. Replace relative image markdown links
   text = text.replace(/!\[([^\]]*)\]\((images\/[^)]+)\)/g, (match, alt, rel) => {
     return `![${alt}](/api/asset/${encodeURIComponent(props.stem)}/${rel})`;
   });
 
-  // 2. Replace relative video markdown links or tags
+  // 2. Replace relative video markdown links
   text = text.replace(/!\[([^\]]*)\]\((videos\/[^)]+)\)/g, (match, alt, rel) => {
     const videoUrl = `/api/asset/${encodeURIComponent(props.stem)}/${rel}`;
     return `<div class="story-video-wrap"><video src="${videoUrl}" controls poster="" preload="metadata"></video><p class="story-media-caption">${alt}</p></div>`;
   });
 
   // 3. Process storybook-media tags into embedded interactive cards
-  // <!-- storybook-media: { "id": "...", ... } -->
   text = text.replace(/<!--\s*storybook-media:\s*(\{.*?\})\s*-->/gs, (match, jsonStr) => {
     try {
       const tagData = JSON.parse(jsonStr);
@@ -193,7 +193,6 @@ const renderedHtml = computed(() => {
           `;
         }
       } else {
-        // Pending placeholder
         return `
           <div class="embedded-pending-scene">
             <div class="pending-header">
@@ -213,7 +212,6 @@ const renderedHtml = computed(() => {
 });
 
 function handleContentClick(event) {
-  // Check if click was on an image to trigger lightbox
   const target = event.target;
   if (target.tagName === 'IMG') {
     const src = target.getAttribute('src');
@@ -252,239 +250,112 @@ async function copyRaw() {
 .story-reader {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.25rem;
 }
 
 .reader-toolbar {
+  padding: 0.6rem 1rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 1rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--md-sys-color-surface-container);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--shape-corner-large);
-}
-
-.reader-meta {
-  display: flex;
-  align-items: center;
   gap: 0.75rem;
-  flex-wrap: wrap;
 }
 
-.badge-type {
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-  font-weight: 600;
-}
-
-.read-stat {
-  font-size: 0.85rem;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.reader-actions {
+.toolbar-meta {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 
-.font-size-control {
+.stat-pill {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.toolbar-actions {
   display: flex;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--shape-corner-full);
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.font-stepper {
+  display: flex;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--md-sys-color-surface-container-high);
 }
 
-.size-btn {
+.stepper-btn {
   border: none;
   background: transparent;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--md-sys-color-on-surface);
+  padding: 0.25rem 0.55rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: all 0.15s;
 }
 
-.size-btn:hover:not(:disabled) {
-  background: var(--md-sys-color-surface-container-highest);
+.stepper-btn:hover:not(:disabled) {
+  background: var(--bg-surface);
+  color: var(--text-primary);
 }
 
-.size-btn:disabled {
-  opacity: 0.4;
+.stepper-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-.raw-toggle {
-  padding: 0.35rem 0.8rem;
-  font-size: 0.85rem;
-  height: 34px;
-}
-
-.reader-paper {
-  background: var(--md-sys-color-surface-container-low);
-  padding: 3rem 4rem;
-  border-radius: var(--shape-corner-extra-large);
-  border: 1px solid var(--md-sys-color-outline-variant);
+.story-sheet {
+  padding: 2.5rem 3rem;
   min-height: 500px;
 }
 
 @media (max-width: 768px) {
-  .reader-paper {
+  .story-sheet {
     padding: 1.5rem 1rem;
   }
 }
 
 .story-markdown {
-  font-size: calc(1.15rem * var(--reader-font-scale, 1));
+  font-size: calc(1.1rem * var(--reader-font-scale, 1));
 }
 
-:deep(.story-video-wrap) {
-  margin: 2rem 0;
-  border-radius: var(--shape-corner-large);
+.raw-box {
   overflow: hidden;
-  box-shadow: var(--elevation-2);
-  background: #000;
 }
 
-:deep(.story-video-wrap video) {
-  width: 100%;
-  max-height: 480px;
-  display: block;
-}
-
-:deep(.story-media-caption) {
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-  text-align: center;
-  color: var(--md-sys-color-on-surface-variant);
-  margin-top: 0.5rem;
-  font-style: italic;
-}
-
-:deep(.embedded-scene-card) {
-  margin: 2.5rem 0;
-  border-radius: var(--shape-corner-large);
-  overflow: hidden;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container);
-  box-shadow: var(--elevation-2);
-}
-
-:deep(.embedded-img) {
-  width: 100%;
-  max-height: 480px;
-  object-fit: contain;
-  background: var(--md-sys-color-surface-container-lowest);
-  display: block;
-  cursor: zoom-in;
-}
-
-:deep(.embedded-video) {
-  width: 100%;
-  max-height: 480px;
-  display: block;
-  background: #000;
-}
-
-:deep(.scene-meta-box) {
-  padding: 1rem 1.25rem;
-  font-family: var(--font-sans);
-}
-
-:deep(.scene-tag-badge) {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--md-sys-color-primary);
-  margin-bottom: 0.35rem;
-}
-
-:deep(.scene-prompt) {
-  margin: 0;
-  font-size: 0.9rem;
-  line-height: 1.45;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-:deep(.embedded-pending-scene) {
-  margin: 2rem 0;
-  padding: 1.25rem;
-  border: 1px dashed var(--md-sys-color-outline-variant);
-  border-radius: var(--shape-corner-medium);
-  background: var(--md-sys-color-surface-container);
-  font-family: var(--font-sans);
-}
-
-:deep(.pending-header) {
+.raw-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: var(--bg-surface-secondary);
+  border-bottom: 1px solid var(--border-default);
 }
 
-:deep(.pending-badge) {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #d97706;
-}
-
-:deep(.pending-type) {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  background: var(--md-sys-color-surface-container-high);
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--shape-corner-full);
-}
-
-:deep(.pending-prompt) {
-  margin: 0;
-  font-size: 0.85rem;
-  line-height: 1.45;
-  color: var(--md-sys-color-on-surface-variant);
-  font-style: italic;
-}
-
-.raw-markdown-view {
-  background: var(--md-sys-color-surface-container);
-  border-radius: var(--shape-corner-large);
-  overflow: hidden;
-}
-
-.raw-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem 1.25rem;
-  background: var(--md-sys-color-surface-container-high);
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.raw-title {
+.raw-file-name {
   font-family: var(--font-mono);
+  font-size: 0.85rem;
   font-weight: 600;
-  font-size: 0.9rem;
 }
 
-.raw-markdown-view pre {
+.raw-box pre {
   margin: 0;
   padding: 1.25rem;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  line-height: 1.6;
+  line-height: 1.55;
+  background: var(--bg-surface);
 }
 
 .empty-state {
   text-align: center;
   padding: 4rem 2rem;
-  color: var(--md-sys-color-on-surface-variant);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -492,7 +363,7 @@ async function copyRaw() {
 }
 
 .empty-icon {
-  font-size: 48px;
-  color: var(--md-sys-color-outline);
+  font-size: 40px;
+  color: var(--text-muted);
 }
 </style>

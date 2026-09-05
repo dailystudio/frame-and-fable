@@ -200,11 +200,14 @@ function storybookOutputsPlugin() {
               }
             }
 
-            // Load Markdown (output or example source)
+            // Load Markdown (output, workspace, examples, or tests)
             let markdownContent = '';
             let markdownType = 'none';
             const outputMdPath = path.join(wsDir, `${stem}-output.md`);
             const exampleMdPath = path.join(examplesDir, `${stem}.md`);
+            const exampleCraftedPath = path.join(examplesDir, `${stem}_crafted.md`);
+            const exampleStemCleanCrafted = path.join(examplesDir, `${stem.replace(/_zh$|_en$/, '')}_crafted.md`);
+            const testsMdPath = path.resolve(__dirname, `../tests/${stem}.md`);
 
             if (fs.existsSync(outputMdPath)) {
               markdownContent = fs.readFileSync(outputMdPath, 'utf-8');
@@ -212,8 +215,16 @@ function storybookOutputsPlugin() {
             } else if (fs.existsSync(exampleMdPath)) {
               markdownContent = fs.readFileSync(exampleMdPath, 'utf-8');
               markdownType = 'example';
+            } else if (fs.existsSync(exampleCraftedPath)) {
+              markdownContent = fs.readFileSync(exampleCraftedPath, 'utf-8');
+              markdownType = 'example';
+            } else if (fs.existsSync(exampleStemCleanCrafted)) {
+              markdownContent = fs.readFileSync(exampleStemCleanCrafted, 'utf-8');
+              markdownType = 'example';
+            } else if (fs.existsSync(testsMdPath)) {
+              markdownContent = fs.readFileSync(testsMdPath, 'utf-8');
+              markdownType = 'test';
             } else {
-              // search for any .md in wsDir
               const mdFiles = fs.readdirSync(wsDir).filter(f => f.endsWith('.md'));
               if (mdFiles.length > 0) {
                 markdownContent = fs.readFileSync(path.join(wsDir, mdFiles[0]), 'utf-8');
@@ -221,15 +232,55 @@ function storybookOutputsPlugin() {
               }
             }
 
-            // Extract tags from markdown if present
-            const tags = [];
-            const tagRegex = /<!--\s*storybook-media:\s*(\{.*?\})\s*-->/gs;
-            let match;
-            while ((match = tagRegex.exec(markdownContent)) !== null) {
+            // Extract tags with comprehensive parsing
+            const rawTags = [];
+            const jsonRegex = /<!--\s*storybook-media:\s*(\{.*?\})\s*-->/gs;
+            let m;
+            while ((m = jsonRegex.exec(markdownContent)) !== null) {
               try {
-                tags.push(JSON.parse(match[1]));
+                rawTags.push({ ...JSON.parse(m[1]), _pos: m.index });
               } catch (e) {}
             }
+
+            const kvRegex = /<!--\s*storybook-media\s+([^>]*?)\s*-->/gs;
+            while ((m = kvRegex.exec(markdownContent)) !== null) {
+              const content = m[1].trim();
+              if (content.startsWith('{') || content.startsWith(':')) continue;
+              const kvDict = { _pos: m.index };
+              const attrRegex = /(\w+)=["'](.*?)["']/g;
+              let am;
+              while ((am = attrRegex.exec(content)) !== null) {
+                kvDict[am[1]] = am[2];
+              }
+              if (kvDict.id || kvDict.type) {
+                rawTags.push(kvDict);
+              }
+            }
+
+            rawTags.sort((a, b) => (a._pos || 0) - (b._pos || 0));
+
+            // Enrich tags with generated asset links
+            const allGenerated = [...generatedImages, ...generatedVideos];
+            const tags = rawTags.map(({ _pos, ...tag }) => {
+              const tagId = tag.id || '';
+              const tagType = tag.type || 'image';
+              const matched = allGenerated.find(a =>
+                a.id === tagId ||
+                a.name.startsWith(tagId + '.') ||
+                a.name.includes(tagId) ||
+                (tag.asset && a.name === path.basename(tag.asset))
+              );
+
+              return {
+                ...tag,
+                type: tagType,
+                section: tag.section || tag.title || 'Story Scene',
+                prompt: tag.prompt || '',
+                context_hint: tag.context_hint || '',
+                isGenerated: !!matched,
+                matchedAsset: matched || null
+              };
+            });
 
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.end(JSON.stringify({

@@ -6,17 +6,18 @@
     aria-label="Media Preview Lightbox"
     @close="onDialogClose"
   >
-    <div class="lightbox-card" @click.stop>
-      <header class="lightbox-header">
-        <div class="lightbox-title-wrap">
-          <span class="material-symbols-rounded lightbox-type-icon">
+    <div class="lightbox-sheet clean-card" @click.stop>
+      <!-- Header -->
+      <header class="sheet-head">
+        <div class="sheet-title-group">
+          <span class="material-symbols-rounded head-icon">
             {{ mediaType === 'video' ? 'videocam' : 'image' }}
           </span>
-          <h3 class="lightbox-title">{{ mediaTitle || 'Media Preview' }}</h3>
+          <span class="sheet-title">{{ mediaTitle || 'Media Preview' }}</span>
         </div>
         <button
           type="button"
-          class="md-icon-btn"
+          class="clean-icon-btn close-btn"
           aria-label="Close dialog"
           @click="close"
         >
@@ -24,36 +25,38 @@
         </button>
       </header>
 
-      <div class="lightbox-body">
-        <div class="lightbox-media-container">
+      <!-- Media Content Area -->
+      <div class="sheet-body">
+        <div class="media-viewport">
           <video
             v-if="mediaType === 'video'"
             :src="mediaSrc"
             controls
             autoplay
-            class="lightbox-media"
+            class="media-elem"
           ></video>
           <img
             v-else
             :src="mediaSrc"
             :alt="mediaTitle"
-            class="lightbox-media"
+            class="media-elem"
           />
         </div>
 
-        <div v-if="mediaPrompt || mediaDetails" class="lightbox-details">
-          <div v-if="mediaDetails" class="lightbox-meta-chips">
-            <span v-for="(val, key) in mediaDetails" :key="key" class="md-badge">
+        <!-- Details & Prompt -->
+        <div v-if="mediaPrompt || mediaDetails" class="details-section">
+          <div v-if="mediaDetails" class="meta-pills">
+            <span v-for="(val, key) in mediaDetails" :key="key" class="clean-badge">
               <strong>{{ key }}:</strong> {{ val }}
             </span>
           </div>
 
           <div v-if="mediaPrompt" class="lightbox-prompt-box">
             <div class="prompt-header">
-              <span class="prompt-label">Generation / Visual Prompt</span>
+              <span class="prompt-label">Generation / Scene Prompt</span>
               <button
                 type="button"
-                class="md-btn md-btn-tonal copy-btn"
+                class="clean-btn clean-btn-sm"
                 @click="copyPrompt"
               >
                 <span class="material-symbols-rounded">
@@ -77,7 +80,7 @@ const dialogRef = ref(null);
 const isOpen = ref(false);
 const mediaSrc = ref('');
 const mediaTitle = ref('');
-const mediaType = ref('image'); // 'image' | 'video'
+const mediaType = ref('image');
 const mediaPrompt = ref('');
 const mediaDetails = ref(null);
 const copied = ref(false);
@@ -165,132 +168,117 @@ defineExpose({
   background: transparent;
   padding: 0;
   margin: auto;
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: 92vw;
+  max-height: 92vh;
   box-shadow: none;
   overflow: visible;
 }
 
 .lightbox-dialog::backdrop {
-  background-color: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(10px);
+  background-color: rgba(9, 9, 11, 0.7);
+  backdrop-filter: blur(8px);
 }
 
-.lightbox-card {
+.lightbox-sheet {
   display: flex;
   flex-direction: column;
-  background: var(--md-sys-color-surface-container);
-  border-radius: var(--shape-corner-extra-large);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  box-shadow: var(--elevation-4);
-  max-width: 1000px;
-  width: 90vw;
+  max-width: 960px;
+  width: 92vw;
   max-height: 88vh;
   overflow: hidden;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
 }
 
-.lightbox-header {
+.sheet-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-high);
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
 }
 
-.lightbox-title-wrap {
+.sheet-title-group {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
-.lightbox-type-icon {
-  color: var(--md-sys-color-primary);
-  font-size: 24px;
+.head-icon {
+  font-size: 20px;
+  color: var(--accent-primary);
 }
 
-.lightbox-title {
-  margin: 0;
-  font-size: 1.15rem;
+.sheet-title {
+  font-size: 0.95rem;
   font-weight: 600;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
 }
 
-.lightbox-body {
-  padding: 1.25rem;
+.sheet-body {
+  padding: 1rem 1.25rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  align-items: center;
+  gap: 1rem;
 }
 
-.lightbox-media-container {
+.media-viewport {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--md-sys-color-surface-container-lowest);
-  border-radius: var(--shape-corner-large);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  width: 100%;
-  max-height: 55vh;
+  background: #000;
+  border-radius: var(--radius-md);
   overflow: hidden;
+  max-height: 52vh;
 }
 
-.lightbox-media {
+.media-elem {
   max-width: 100%;
-  max-height: 55vh;
+  max-height: 52vh;
   object-fit: contain;
   display: block;
 }
 
-.lightbox-details {
-  width: 100%;
+.details-section {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 
-.lightbox-meta-chips {
+.meta-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .lightbox-prompt-box {
-  background: var(--md-sys-color-surface-container-highest);
-  border-radius: var(--shape-corner-medium);
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
 }
 
 .prompt-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.4rem;
+  margin-bottom: 0.35rem;
 }
 
 .prompt-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
   font-weight: 700;
-  color: var(--md-sys-color-primary);
-}
-
-.copy-btn {
-  padding: 0.25rem 0.6rem;
-  font-size: 0.8rem;
-  height: 28px;
+  color: var(--text-muted);
 }
 
 .prompt-text {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--md-sys-color-on-surface);
+  color: var(--text-primary);
   white-space: pre-wrap;
-  font-family: var(--font-sans);
 }
 </style>
