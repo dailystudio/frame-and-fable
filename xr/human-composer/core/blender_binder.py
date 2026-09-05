@@ -2,7 +2,7 @@
 Blender worker script for Human Composer.
 Runs inside Blender to unpack USDZ, prevent texture collision,
 align hair mesh to head using reference data, rig hair to armature,
-and export the bound USDZ.
+export the bound USDZ, and render static & animated previews.
 """
 
 import sys
@@ -103,12 +103,26 @@ def update_material_texture(mesh_obj, mat_name, tex_path):
                 node.image = img
 
 
+def setup_lighting_and_world():
+    """Configure studio lighting and world background."""
+    world = bpy.context.scene.world or bpy.data.worlds.new("World")
+    bpy.context.scene.world = world
+    world.use_nodes = True
+    bg_node = world.node_tree.nodes.get("Background")
+    if bg_node:
+        bg_node.inputs["Color"].default_value = (0.92, 0.92, 0.92, 1.0)
+        bg_node.inputs["Strength"].default_value = 1.0
+
+
 def main():
     config = parse_args()
     body_usdz = config["body"]
     hair_usdz = config["hair"]
-    output_usdz = config["output"]
-    preview_dir = config.get("preview_dir")
+    output_usdz = config["output_usdz"]
+    preview_image_path = config.get("preview_image_path")
+    preview_video_path = config.get("preview_video_path")
+    intermediate_dir = config.get("intermediate_dir")
+    render_intermediate = config.get("render_intermediate", False)
     ref_data = config.get("ref_data", {})
 
     temp_root = tempfile.mkdtemp(prefix="human_composer_")
@@ -243,24 +257,22 @@ def main():
             target_depth = target_width * (head_depth / head_width) * 1.06
             target_y_center = head_y_center + 0.04
 
-        # Fluff factor ensures hair volume completely covers the skull without clipping
         scale_x = (target_width / hair_width) * 1.025
         scale_y = (target_depth / hair_depth) * 1.04
         scale_z = scale_x * 1.02
 
-        # Ensure target_y_center adequately covers the rear skull
         target_y_center = max(target_y_center, head_y_center + 0.038)
 
         loc_x = head_x_center - (hair_x_center * scale_x)
         loc_y = target_y_center - (hair_y_center * scale_y)
         loc_z = target_top - (hair_z_max * scale_z)
 
-        # Ensure crown coverage
+        # Crown coverage check
         scaled_hair_top = hair_z_max * scale_z + loc_z
         if scaled_hair_top < head_z_max + 0.03:
             loc_z += (head_z_max + 0.035 - scaled_hair_top)
 
-        # Ensure rear skull coverage
+        # Rear skull coverage check
         scaled_hair_back = hair_y_max * scale_y + loc_y
         if scaled_hair_back < head_y_max + 0.02:
             loc_y += (head_y_max + 0.025 - scaled_hair_back)
@@ -285,7 +297,6 @@ def main():
         mod = hair_mesh.modifiers.new(name="Armature", type="ARMATURE")
         mod.object = armature
 
-        # Assign vertex group for head bone
         head_bone_name = "mixamorig_Head"
         vg = hair_mesh.vertex_groups.new(name=head_bone_name)
         vg.add(list(range(len(hair_mesh.data.vertices))), 1.0, "REPLACE")
@@ -306,43 +317,93 @@ def main():
         )
         print("[Blender Binder] USDZ export complete.")
 
-        # 9. Render Multi-Angle Previews if requested
-        if preview_dir:
-            print(f"[Blender Binder] Rendering preview images to {preview_dir}...")
-            os.makedirs(preview_dir, exist_ok=True)
+        # Setup Camera & Lighting for Previews
+        setup_lighting_and_world()
 
-            world = bpy.context.scene.world or bpy.data.worlds.new("World")
-            bpy.context.scene.world = world
-            world.use_nodes = True
-            bg_node = world.node_tree.nodes.get("Background")
-            if bg_node:
-                bg_node.inputs["Color"].default_value = (0.92, 0.92, 0.92, 1.0)
-                bg_node.inputs["Strength"].default_value = 1.0
+        cam_data = bpy.data.cameras.new("PreviewCamera")
+        cam_data.type = "ORTHO"
+        cam_data.ortho_scale = 2.05
+        cam_obj = bpy.data.objects.new("PreviewCamera", cam_data)
+        bpy.context.scene.collection.objects.link(cam_obj)
+        bpy.context.scene.camera = cam_obj
 
-            cam_data = bpy.data.cameras.new("PreviewCamera")
-            cam_data.type = "ORTHO"
-            cam_data.ortho_scale = 1.9767
-            cam_obj = bpy.data.objects.new("PreviewCamera", cam_data)
-            bpy.context.scene.collection.objects.link(cam_obj)
-            bpy.context.scene.camera = cam_obj
-
+        # 9. Render Static Preview Image
+        if preview_image_path:
+            print(f"[Blender Binder] Rendering static preview to {preview_image_path}...")
+            os.makedirs(os.path.dirname(os.path.abspath(preview_image_path)), exist_ok=True)
+            cam_obj.location = (0, -5.0, 0.95)
+            cam_obj.rotation_euler = (math.radians(90), 0, 0)
             bpy.context.scene.render.resolution_x = 1024
             bpy.context.scene.render.resolution_y = 1024
+            bpy.context.scene.render.image_settings.file_format = 'PNG'
+            bpy.context.scene.render.filepath = preview_image_path
+            bpy.ops.render.render(write_still=True)
+            print(f"[Blender Binder] Saved static preview: {preview_image_path}")
 
+        # 10. Render Intermediate Multi-Angle Images
+        if render_intermediate and intermediate_dir:
+            print(f"[Blender Binder] Rendering intermediate multi-angle images to {intermediate_dir}...")
+            os.makedirs(intermediate_dir, exist_ok=True)
             cam_views = {
                 "front": ((0, -5.0, 0.95), (math.radians(90), 0, 0)),
                 "left": ((5.0, 0, 0.95), (math.radians(90), 0, math.radians(90))),
                 "right": ((-5.0, 0, 0.95), (math.radians(90), 0, math.radians(-90))),
                 "back": ((0, 5.0, 0.95), (math.radians(90), 0, math.radians(180))),
             }
+            bpy.context.scene.render.resolution_x = 1024
+            bpy.context.scene.render.resolution_y = 1024
+            bpy.context.scene.render.image_settings.file_format = 'PNG'
 
             for view_name, (cam_loc, cam_rot) in cam_views.items():
                 cam_obj.location = cam_loc
                 cam_obj.rotation_euler = cam_rot
-                preview_path = os.path.join(preview_dir, f"preview_{view_name}.png")
-                bpy.context.scene.render.filepath = preview_path
+                img_path = os.path.join(intermediate_dir, f"render_{view_name}.png")
+                bpy.context.scene.render.filepath = img_path
                 bpy.ops.render.render(write_still=True)
-                print(f"[Blender Binder] Saved preview: {preview_path}")
+
+        # 11. Render 360° Turntable Animation (MP4)
+        if preview_video_path:
+            print(f"[Blender Binder] Rendering preview animation to {preview_video_path}...")
+            os.makedirs(os.path.dirname(os.path.abspath(preview_video_path)), exist_ok=True)
+
+            target_rot_obj = root_empty if root_empty else armature
+            target_rot_obj.rotation_mode = 'XYZ'
+            target_rot_obj.animation_data_clear()
+
+            total_frames = 48
+            bpy.context.scene.frame_start = 1
+            bpy.context.scene.frame_end = total_frames
+            bpy.context.scene.render.fps = 24
+
+            # Keyframe 360 rotation with linear interpolation
+            target_rot_obj.rotation_euler.z = 0.0
+            target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=1)
+
+            # Continuous loop: frame total_frames reaches 2pi * (frames - 1) / frames
+            target_rot_obj.rotation_euler.z = 2.0 * math.pi * (total_frames - 1) / total_frames
+            target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=total_frames)
+
+            # Make interpolation linear
+            if target_rot_obj.animation_data and target_rot_obj.animation_data.action:
+                for fcurve in target_rot_obj.animation_data.action.fcurves:
+                    for kf in fcurve.keyframe_points:
+                        kf.interpolation = 'LINEAR'
+
+            # Camera pointing front
+            cam_obj.location = (0, -5.0, 0.95)
+            cam_obj.rotation_euler = (math.radians(90), 0, 0)
+
+            bpy.context.scene.render.resolution_x = 512
+            bpy.context.scene.render.resolution_y = 512
+            bpy.context.scene.render.image_settings.file_format = 'FFMPEG'
+            bpy.context.scene.render.ffmpeg.format = 'MPEG4'
+            bpy.context.scene.render.ffmpeg.codec = 'H264'
+            bpy.context.scene.render.ffmpeg.constant_rate_factor = 'MEDIUM'
+            bpy.context.scene.render.ffmpeg.ffmpeg_preset = 'GOOD'
+            bpy.context.scene.render.filepath = preview_video_path
+
+            bpy.ops.render.render(animation=True)
+            print(f"[Blender Binder] Saved preview animation: {preview_video_path}")
 
     finally:
         if os.path.exists(temp_root):

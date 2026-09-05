@@ -4,10 +4,15 @@ A CLI tool powered by Blender to compose, align, and bind accessories (such as h
 
 ## Key Features
 
-- **Multi-View Reference Alignment**: Leverages 2D multi-angle character reference images (`--ref-front`, `--ref-left`, `--ref-right`, `--ref-back`) to automatically calculate 3D scale, position, depth, and volume offsets so the hair aligns accurately with the head.
-- **Full Armature Binding & Rigging**: Binds and parents the hair mesh to the body's skeleton (`Armature`) and paints vertex group weights to `mixamorig_Head`, allowing the hair to deform synchronously with head movements and dancing animations.
-- **Texture Conflict Resolution**: Automatically avoids overwrites when both body and hair USDZ models contain same-named textures (such as `textures/shaded.png`) by isolating, renaming, and relinking shader nodes before USDZ export.
-- **Headless Blender Automation**: Executes via Blender's background scripting mode without requiring a GUI.
+- **Multi-View Reference Alignment**: Leverages 2D multi-angle character reference images (`--ref-front`, `--ref-left`, `--ref-right`, `--ref-back`) to dynamically calculate 3D scale, position, depth, and crown volume offsets so hair fits the skull naturally.
+- **Full Armature Binding & Rigging**: Binds and parents the hair mesh to the body's skeleton (`Armature`) and paints vertex group weights to `mixamorig_Head`, allowing hair to deform synchronously with head movement and skeletal animations.
+- **Texture Conflict Resolution**: Automatically avoids overwrites when both body and hair USDZ models contain identically named textures (such as `textures/shaded.png`) by isolating, renaming, and relinking shader nodes before USDZ export.
+- **Automated Output Suite**: Generates a dedicated subdirectory per model under `outputs/` containing:
+  - **Bound USDZ Model**: Ready for AR / XR / 3D scenes.
+  - **Static Preview Image (`preview.png`)**: High-resolution rendered preview.
+  - **Turntable Animation (`preview_animation.mp4`)**: Smooth 360° video loop.
+  - **Intermediate Comparisons (`intermediates/`)**: Multi-angle renders and side-by-side comparison images against reference photos (via `--intermediate`).
+- **Headless Blender Automation**: Executes seamlessly via Blender's background scripting mode without requiring a GUI.
 
 ---
 
@@ -15,8 +20,8 @@ A CLI tool powered by Blender to compose, align, and bind accessories (such as h
 
 1. **Python 3.10+**
 2. **Blender 4.0+**
-   - On macOS: installed at `/Applications/Blender.app` (auto-detected).
-   - On Linux/Windows: `blender` in system `PATH`, or set `BLENDER_PATH=/path/to/blender`, or pass `--blender <path>`.
+   - **macOS**: Installed at `/Applications/Blender.app` (auto-detected).
+   - **Linux / Windows**: `blender` in system `PATH`, or set `BLENDER_PATH=/path/to/blender`, or pass `--blender <path>`.
 
 ---
 
@@ -37,22 +42,26 @@ pip install -r requirements.txt
 
 ## Usage
 
-### 1. Basic Binding (Geometric Alignment)
+### 1. Basic Binding (Default Output Structure)
 
-If reference images are not available, Human Composer will automatically align the hair to the body's scalp and skull geometry:
+By default, output files are organized into `outputs/<model_name>/` (inferred from the body filename, e.g. `tests/man_anim_base.usdz` -> `outputs/man/`):
 
 ```bash
 python human-composer.py bind \
-  --body path/to/body.usdz \
-  --hair path/to/hair.usdz \
-  --output path/to/output_bound.usdz
+  --body tests/man_anim_base.usdz \
+  --hair tests/man_hair.usdz
 ```
+
+This generates:
+- `outputs/man/man_bound.usdz`
+- `outputs/man/preview.png`
+- `outputs/man/preview_animation.mp4`
 
 ---
 
-### 2. Multi-View Reference Alignment (Recommended)
+### 2. Multi-View Reference Alignment with Intermediates
 
-Provide reference images from different angles to achieve precise alignment that matches the character's appearance:
+Provide multi-angle reference photos and add `--intermediate` to generate side-by-side comparison images:
 
 ```bash
 python human-composer.py bind \
@@ -61,8 +70,7 @@ python human-composer.py bind \
   --ref-front tests/man_ref_front.png \
   --ref-left tests/man_ref_left.png \
   --ref-back tests/man_ref_back.png \
-  --output tests/man_bound.usdz \
-  --preview-dir tests/man_previews
+  --intermediate
 ```
 
 #### Female Model Example:
@@ -74,8 +82,28 @@ python human-composer.py bind \
   --ref-front tests/woman_ref_front.png \
   --ref-right tests/woman_ref_right.png \
   --ref-back tests/woman_ref_back.png \
-  --output tests/woman_bound.usdz \
-  --preview-dir tests/woman_previews
+  --intermediate
+```
+
+---
+
+## Output Structure
+
+When executing a binding task with `--intermediate`:
+
+```
+outputs/
+└── man/
+    ├── man_bound.usdz            # Bound 3D model with rigged skeleton and distinct textures
+    ├── preview.png               # High-res static render
+    ├── preview_animation.mp4     # 360-degree turntable video loop
+    └── intermediates/            # Generated when --intermediate is passed
+        ├── render_front.png
+        ├── render_left.png
+        ├── render_back.png
+        ├── comparison_front.png  # Side-by-side: reference photo vs. 3D render
+        ├── comparison_left.png
+        └── comparison_back.png
 ```
 
 ---
@@ -86,39 +114,40 @@ python human-composer.py bind \
 usage: human-composer.py bind [-h] --body BODY --hair HAIR
                               [--ref-front REF_FRONT] [--ref-left REF_LEFT]
                               [--ref-right REF_RIGHT] [--ref-back REF_BACK]
-                              [--output OUTPUT] [--blender BLENDER]
-                              [--preview-dir PREVIEW_DIR]
-
-Required arguments:
-  --body BODY           Path to input body USDZ model (contains mesh and armature).
-  --hair HAIR           Path to input hair USDZ model.
-
-Reference image arguments (optional):
-  --ref-front REF_FRONT Path to front-angle reference image.
-  --ref-left REF_LEFT   Path to left-angle reference image.
-  --ref-right REF_RIGHT Path to right-angle reference image.
-  --ref-back REF_BACK   Path to back-angle reference image.
-
-Output & Configuration:
-  --output OUTPUT       Path to output bound USDZ file. Default: <body_stem>_bound.usdz.
-  --preview-dir DIR     Directory to save 4-view orthographic verification renders.
-  --blender PATH        Path to custom Blender executable (optional).
+                              [--output-dir OUTPUT_DIR] [--output OUTPUT]
+                              [--name NAME] [--intermediate] [--blender BLENDER]
 ```
+
+### Options
+
+| Flag | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--body` | Path | *Required* | Path to input human body USDZ model (mesh + armature). |
+| `--hair` | Path | *Required* | Path to input hair accessory USDZ model. |
+| `--ref-front` | Path | `None` | Path to front-angle reference image. |
+| `--ref-left` | Path | `None` | Path to left-angle reference image. |
+| `--ref-right` | Path | `None` | Path to right-angle reference image. |
+| `--ref-back` | Path | `None` | Path to back-angle reference image. |
+| `--output-dir` | Path | `outputs` | Root output directory. A subfolder named after the model will be created inside. |
+| `--output` | Path | `None` | Custom explicit destination path (overrides `--output-dir`). |
+| `--name` | String | `None` | Custom model name for the subdirectory (default: inferred from `--body`). |
+| `--intermediate` | Flag | `False` | Also output multi-angle renders and side-by-side reference comparison images. |
+| `--blender` | Path | Auto | Path to custom Blender executable. |
 
 ---
 
 ## Technical Details
 
-1. **Reference Silhouette Extraction**:
-   `core/ref_analyzer.py` samples background colors from reference images, segments foreground silhouettes, and computes character height ($H_{ref}$) and head boundary metrics ($X_{center}, W_{head}, Y_{top}$).
-2. **2D-to-3D Scale Mapping**:
-   Using the character's 3D height ($H_{3D}$), the analyzer calculates the exact metric conversion:
+1. **Dynamic Reference Silhouette Extraction**:
+   `core/ref_analyzer.py` samples background colors, segments character silhouettes, and calculates character pixel height ($H_{ref}$), head boundary dimensions ($W_{head}, H_{head}$), and horizontal centers ($X_{center}$).
+2. **2D-to-3D Metric Conversion**:
+   Using the character's real 3D height ($H_{3D}$), the script derives physical metric conversion:
    $$m/\text{px} = \frac{H_{3D}}{H_{ref}}$$
-   This translates 2D pixel widths and offsets into 3D target coordinates ($S_x, S_y, S_z, T_x, T_y, T_z$), accounting for natural volume puff and scalp clearance.
+   This maps 2D pixel proportions directly to 3D bounding transforms ($S_x, S_y, S_z, T_x, T_y, T_z$), with crown volume clearance ($Z \ge Z_{head} + 0.03\text{m}$) and backward depth offsets ($Y \ge Y_{center} + 0.038\text{m}$) to prevent scalp clipping.
 3. **Texture Isolation**:
-   `core/blender_binder.py` unpacks both USDZ archives into separate staging directories, renames `shaded.png` to `body_shaded.png` and `hair_shaded.png`, and updates Principled BSDF node trees before re-exporting to avoid collision.
+   `core/blender_binder.py` unpacks both USDZ models into isolated staging folders, renames `shaded.png` to `body_shaded.png` and `hair_shaded.png`, and repoints Blender Image datablocks and Principled BSDF nodes before USDZ re-export.
 4. **Skeletal Animation Support**:
-   The bound hair inherits the body's skeletal hierarchy and is assigned 1.0 weight to `mixamorig_Head`, ensuring hair moves synchronously with animation files (such as `tests/man_anim_hip_hop_dancing.usdc`).
+   The bound hair mesh is parented to the body's armature and assigned 1.0 weight to the `mixamorig_Head` vertex group, enabling seamless deformation during motion and dancing animations (e.g. `tests/man_anim_hip_hop_dancing.usdc`).
 
 ---
 
@@ -129,7 +158,8 @@ human-composer/
 ├── human-composer.py       # Top-level CLI entry point
 ├── requirements.txt        # Python dependencies (numpy, Pillow, scipy)
 ├── core/
-│   ├── ref_analyzer.py     # Reference image silhouette & metric extractor
+│   ├── ref_analyzer.py     # Reference silhouette analyzer & metric solver
 │   └── blender_binder.py   # Headless Blender worker script
-└── tests/                  # Sample USDZ models, USDC animations & reference images
+├── outputs/                # Default generated outputs directory
+└── tests/                  # Sample test assets (USDZ models, USDC animations, reference photos)
 ```

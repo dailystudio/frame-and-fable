@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 Human Composer CLI tool.
-Binds accessories and hair models with human body models in USDZ format.
+Binds accessories and hair models with human body models in USDZ format,
+generating bound models, static previews, MP4 turntable animations,
+and intermediate comparison images.
 """
 
 import sys
@@ -12,6 +14,7 @@ import shutil
 import json
 import tempfile
 import zipfile
+from PIL import Image, ImageDraw
 
 from core.ref_analyzer import analyze_all_references
 
@@ -36,6 +39,19 @@ def find_blender(custom_path=None):
     return None
 
 
+def derive_model_name(body_path, custom_name=None):
+    """Derive clean model name from body filename."""
+    if custom_name:
+        return custom_name
+    stem = os.path.splitext(os.path.basename(body_path))[0]
+    # Remove common suffixes like _anim_base, _base
+    for suffix in ["_anim_base", "_base"]:
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    return stem
+
+
 def verify_usdz_integrity(usdz_path):
     """Inspect exported USDZ archive to verify files and distinct textures."""
     if not os.path.exists(usdz_path):
@@ -49,12 +65,56 @@ def verify_usdz_integrity(usdz_path):
         if not has_usdc:
             return False, "USDZ archive does not contain a USD scene file."
 
-        # Check for duplicate base names in textures
         base_names = [os.path.basename(t) for t in textures]
         if len(base_names) != len(set(base_names)):
             return False, f"Duplicate texture filenames found: {base_names}"
 
     return True, f"Valid USDZ with {len(textures)} textures: {base_names}"
+
+
+def create_side_by_side_comparison(ref_path, render_path, output_path, view_name):
+    """Generate a clean side-by-side comparison between reference and 3D render."""
+    if not os.path.exists(ref_path) or not os.path.exists(render_path):
+        return
+
+    ref_img = Image.open(ref_path).convert("RGB")
+    ren_img = Image.open(render_path).convert("RGB")
+
+    target_h = 1024
+    ref_w = int(ref_img.width * target_h / ref_img.height)
+    ren_w = int(ren_img.width * target_h / ren_img.height)
+
+    ref_resized = ref_img.resize((ref_w, target_h), Image.Resampling.LANCZOS)
+    ren_resized = ren_img.resize((ren_w, target_h), Image.Resampling.LANCZOS)
+
+    header_h = 40
+    margin = 8
+    total_w = ref_w + ren_w + margin
+    total_h = target_h + header_h
+
+    comp = Image.new("RGB", (total_w, total_h), (245, 245, 245))
+    comp.paste(ref_resized, (0, header_h))
+    comp.paste(ren_resized, (ref_w + margin, header_h))
+
+    draw = ImageDraw.Draw(comp)
+    draw.text((20, 12), f"Reference Image ({view_name.capitalize()})", fill=(40, 40, 40))
+    draw.text((ref_w + margin + 20, 12), f"3D Bound Model ({view_name.capitalize()})", fill=(40, 40, 40))
+
+    comp.save(output_path)
+
+
+def generate_all_comparisons(intermediate_dir, ref_map):
+    """Generate side-by-side comparisons for all available reference views."""
+    comparison_files = []
+    for view_name, ref_path in ref_map.items():
+        if not ref_path or not os.path.exists(ref_path):
+            continue
+        render_path = os.path.join(intermediate_dir, f"render_{view_name}.png")
+        if os.path.exists(render_path):
+            comp_path = os.path.join(intermediate_dir, f"comparison_{view_name}.png")
+            create_side_by_side_comparison(ref_path, render_path, comp_path, view_name)
+            comparison_files.append(comp_path)
+    return comparison_files
 
 
 def handle_bind(args):
@@ -72,18 +132,49 @@ def handle_bind(args):
         print(f"[Error] Hair model not found: {args.hair}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output
-    if not output_path:
-        body_stem = os.path.splitext(os.path.basename(args.body))[0]
-        output_path = f"{body_stem}_bound.usdz"
-    output_path = os.path.abspath(output_path)
+    model_name = derive_model_name(args.body, args.name)
+
+    # Determine destination directory
+    if args.output:
+        if args.output.endswith(".usdz"):
+            output_usdz = os.path.abspath(args.output)
+            model_dir = os.path.dirname(output_usdz)
+        else:
+            model_dir = os.path.abspath(args.output)
+            output_usdz = os.path.join(model_dir, f"{model_name}_bound.usdz")
+    else:
+        root_outputs = os.path.abspath(args.output_dir)
+        model_dir = os.path.join(root_outputs, model_name)
+        output_usdz = os.path.join(model_dir, f"{model_name}_bound.usdz")
+
+    os.makedirs(model_dir, exist_ok=True)
+
+    preview_img_path = os.path.join(model_dir, "preview.png")
+    preview_vid_path = os.path.join(model_dir, "preview_animation.mp4")
+
+    # Intermediate handling
+    is_intermediate = args.intermediate
+    intermediate_dir = os.path.join(model_dir, "intermediates") if is_intermediate else None
+    if intermediate_dir:
+        os.makedirs(intermediate_dir, exist_ok=True)
 
     print(f"[Human Composer] Blender: {blender_bin}")
     print(f"[Human Composer] Body: {args.body}")
     print(f"[Human Composer] Hair: {args.hair}")
-    print(f"[Human Composer] Output: {output_path}")
+    print(f"[Human Composer] Model Directory: {model_dir}")
+    print(f"[Human Composer] Target USDZ: {output_usdz}")
+    print(f"[Human Composer] Static Preview: {preview_img_path}")
+    print(f"[Human Composer] Preview Animation: {preview_vid_path}")
+    if is_intermediate:
+        print(f"[Human Composer] Intermediates Directory: {intermediate_dir}")
 
-    # Analyze reference images if provided
+    # Analyze reference images
+    ref_map = {
+        "front": args.ref_front,
+        "left": args.ref_left,
+        "right": args.ref_right,
+        "back": args.ref_back,
+    }
     ref_data = analyze_all_references(
         ref_front=args.ref_front,
         ref_left=args.ref_left,
@@ -95,7 +186,7 @@ def handle_bind(args):
         for v, d in ref_data.items():
             print(f"  - {v}: head width={d['head_width']}px, center={d['head_x_center']:.1f}px")
     else:
-        print("[Human Composer] No reference images provided or found. Using geometric scalp alignment.")
+        print("[Human Composer] No reference images provided. Using geometric scalp alignment.")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     blender_script = os.path.join(script_dir, "core", "blender_binder.py")
@@ -104,8 +195,11 @@ def handle_bind(args):
         config = {
             "body": os.path.abspath(args.body),
             "hair": os.path.abspath(args.hair),
-            "output": output_path,
-            "preview_dir": os.path.abspath(args.preview_dir) if args.preview_dir else None,
+            "output_usdz": output_usdz,
+            "preview_image_path": preview_img_path,
+            "preview_video_path": preview_vid_path,
+            "intermediate_dir": intermediate_dir,
+            "render_intermediate": is_intermediate,
             "ref_data": ref_data,
         }
         json.dump(config, f, indent=2)
@@ -122,23 +216,32 @@ def handle_bind(args):
             config_path,
         ]
         print("[Human Composer] Running Blender binding process...")
-        res = subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
 
         # Verify output archive
-        valid, msg = verify_usdz_integrity(output_path)
+        valid, msg = verify_usdz_integrity(output_usdz)
         if not valid:
             print(f"[Error] Output verification failed: {msg}", file=sys.stderr)
             sys.exit(1)
 
-        print(f"[Human Composer] Successfully bound hair to body! Result saved to:")
-        print(f"  -> {output_path}")
-        print(f"  -> {msg}")
+        # Generate comparison images if intermediate requested
+        if is_intermediate and ref_data:
+            comp_files = generate_all_comparisons(intermediate_dir, ref_map)
+            print(f"[Human Composer] Generated {len(comp_files)} side-by-side comparison files.")
 
-        if args.preview_dir and os.path.exists(args.preview_dir):
-            previews = [f for f in os.listdir(args.preview_dir) if f.endswith(".png")]
-            print(f"[Human Composer] Previews generated ({len(previews)} images in {args.preview_dir}):")
-            for p in sorted(previews):
-                print(f"  - {p}")
+        print("\n========================================================")
+        print("  [Human Composer] Binding Pipeline Completed!")
+        print("========================================================")
+        print(f"  Model Output Directory: {model_dir}")
+        print(f"  -> Bound Model (USDZ) : {output_usdz}")
+        print(f"  -> Static Preview     : {preview_img_path}")
+        print(f"  -> Animation (MP4)    : {preview_vid_path}")
+        if is_intermediate:
+            inter_items = os.listdir(intermediate_dir)
+            print(f"  -> Intermediates ({len(inter_items)} files): {intermediate_dir}")
+            for item in sorted(inter_items):
+                print(f"     * {item}")
+        print("========================================================\n")
 
     except subprocess.CalledProcessError as e:
         print(f"[Error] Blender execution failed with exit code {e.returncode}", file=sys.stderr)
@@ -154,7 +257,6 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Subcommand: bind
     bind_parser = subparsers.add_parser(
         "bind", help="Bind a hair model to a human body model with alignment."
     )
@@ -177,13 +279,21 @@ def main():
         "--ref-back", default=None, help="Path to back reference image."
     )
     bind_parser.add_argument(
-        "--output", default=None, help="Path to output bound USDZ file."
+        "--output-dir", default="outputs", help="Root outputs directory (default: 'outputs')."
+    )
+    bind_parser.add_argument(
+        "--output", default=None, help="Explicit output USDZ path or directory."
+    )
+    bind_parser.add_argument(
+        "--name", default=None, help="Model name for subdir (default: inferred from body filename)."
+    )
+    bind_parser.add_argument(
+        "--intermediate",
+        action="store_true",
+        help="Also output all intermediate multi-angle renders and reference comparison images."
     )
     bind_parser.add_argument(
         "--blender", default=None, help="Path to Blender executable."
-    )
-    bind_parser.add_argument(
-        "--preview-dir", default=None, help="Directory to save rendered multi-angle preview images."
     )
 
     args = parser.parse_args()
