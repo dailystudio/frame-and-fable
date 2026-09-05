@@ -140,68 +140,106 @@ const renderedHtml = computed(() => {
 
   let text = props.markdownContent;
 
-  // 1. Replace relative image markdown links
+  // 1. Fix bold rendering in CJK text:
+  // Convert **bold** and __bold__ to <strong> tags so marked/CommonMark delimiter rules
+  // don't fail when asterisks are adjacent to CJK characters or punctuation marks (e.g. **“皮拉诺瓦”（Pyranova）**)
+  text = text.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
+
+  // 2. Replace relative image markdown links: ![alt](images/xxx.png)
   text = text.replace(/!\[([^\]]*)\]\((images\/[^)]+)\)/g, (match, alt, rel) => {
     return `![${alt}](/api/asset/${encodeURIComponent(props.stem)}/${rel})`;
   });
 
-  // 2. Replace relative video markdown links
+  // 3. Replace relative video markdown links: ![alt](videos/xxx.mp4)
   text = text.replace(/!\[([^\]]*)\]\((videos\/[^)]+)\)/g, (match, alt, rel) => {
     const videoUrl = `/api/asset/${encodeURIComponent(props.stem)}/${rel}`;
-    return `<div class="story-video-wrap"><video src="${videoUrl}" controls poster="" preload="metadata"></video><p class="story-media-caption">${alt}</p></div>`;
+    return `<div class="story-video-wrap"><video src="${videoUrl}" controls preload="metadata"></video><p class="story-media-caption">${alt}</p></div>`;
   });
 
-  // 3. Process storybook-media tags into embedded interactive cards
-  text = text.replace(/<!--\s*storybook-media:\s*(\{.*?\})\s*-->/gs, (match, jsonStr) => {
+  // 4. Process storybook-media tags into clean placeholders or generated embeds
+  // Matches both JSON format <!-- storybook-media: { ... } --> and KV format <!-- storybook-media type="..." ... -->
+  text = text.replace(/<!--\s*storybook-media(?::\s*(\{.*?\})|\s+([^>]*?))\s*-->/gs, (match, jsonStr, kvStr) => {
     try {
-      const tagData = JSON.parse(jsonStr);
-      const tagId = tagData.id || '';
-      const tagType = tagData.type || 'image';
-
-      // Check if generated image/video exists
-      let matched = null;
-      if (tagType === 'video') {
-        matched = props.videos.find(v => v.id === tagId || v.name.includes(tagId));
-      } else {
-        matched = props.images.find(img => img.id === tagId || img.name.includes(tagId));
+      let tagData = {};
+      if (jsonStr) {
+        tagData = JSON.parse(jsonStr);
+      } else if (kvStr) {
+        const attrRegex = /(\w+)=["'](.*?)["']/g;
+        let am;
+        while ((am = attrRegex.exec(kvStr)) !== null) {
+          tagData[am[1]] = am[2];
+        }
       }
 
-      if (matched) {
-        if (tagType === 'video') {
-          return `
-            <div class="embedded-scene-card" data-tag-id="${tagId}">
-              <div class="scene-media-box">
-                <video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata"></video>
-              </div>
-              <div class="scene-meta-box">
-                <span class="scene-tag-badge">🎬 ${tagId}</span>
-                <p class="scene-prompt">${tagData.prompt || ''}</p>
-              </div>
-            </div>
-          `;
-        } else {
-          return `
-            <div class="embedded-scene-card" data-tag-id="${tagId}">
-              <div class="scene-media-box">
-                <img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagData.prompt || '')}" data-title="${tagId}" />
-              </div>
-              <div class="scene-meta-box">
-                <span class="scene-tag-badge">🖼️ ${tagId}</span>
-                <p class="scene-prompt">${tagData.prompt || ''}</p>
-              </div>
-            </div>
-          `;
-        }
+      const tagId = tagData.id || '';
+      const tagType = (tagData.type || 'image').toLowerCase();
+      const tagSection = tagData.section || tagData.title || '';
+      const tagPrompt = tagData.prompt || tagData.description || '';
+
+      // Check if generated image/video exists in workspace
+      let matched = null;
+      if (tagType === 'video') {
+        matched = props.videos.find(v => v.id === tagId || v.name.startsWith(tagId + '.') || v.name.includes(tagId));
       } else {
-        return `
-          <div class="embedded-pending-scene">
-            <div class="pending-header">
-              <span class="pending-badge">⏳ Scene Pending: ${tagId}</span>
-              <span class="pending-type">${tagType}</span>
-            </div>
-            <p class="pending-prompt">${tagData.prompt || 'No prompt'}</p>
-          </div>
-        `;
+        matched = props.images.find(img => img.id === tagId || img.name.startsWith(tagId + '.') || img.name.includes(tagId));
+      }
+
+      const isGenerated = !!matched;
+
+      if (isGenerated) {
+        // If generated asset exists: show embedded visual card with media and clean header
+        const mediaHtml = tagType === 'video'
+          ? `<video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata"></video>`
+          : `<img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" />`;
+
+        return `\n\n<div class="embedded-scene-card type-${tagType}" data-tag-id="${tagId}">
+  <div class="scene-top-bar">
+    <div class="scene-top-left">
+      <span class="type-pill ${tagType}">
+        <span class="material-symbols-rounded">${tagType === 'video' ? 'videocam' : 'image'}</span>
+        ${tagType === 'video' ? 'Video' : 'Image'}
+      </span>
+      <span class="scene-id">${tagId}</span>
+      ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+    </div>
+    <span class="status-badge status-done">
+      <span class="material-symbols-rounded">check</span>
+      Generated
+    </span>
+  </div>
+  <div class="scene-media-box">
+    ${mediaHtml}
+  </div>
+</div>\n\n`;
+      } else {
+        // When pending: render as a clean, compact placeholder with critical info (type, id, section, status)
+        // without cluttering the reading flow with raw prompt text. Clicking placeholder allows inspecting the prompt.
+        const typeLabel = tagType === 'video' ? 'Video' : 'Image';
+        const typeIcon = tagType === 'video' ? 'videocam' : 'image';
+
+        return `\n\n<div class="story-scene-placeholder type-${tagType}"
+     data-tag-id="${tagId}"
+     data-tag-type="${tagType}"
+     data-tag-section="${tagSection}"
+     data-prompt="${encodeURIComponent(tagPrompt)}"
+     data-status="Pending"
+     title="Click to inspect scene prompt">
+  <div class="placeholder-main">
+    <span class="type-pill ${tagType}">
+      <span class="material-symbols-rounded">${typeIcon}</span>
+      ${typeLabel}
+    </span>
+    <span class="scene-id">${tagId}</span>
+    ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+  </div>
+  <div class="placeholder-side">
+    <span class="status-badge status-wait">
+      <span class="material-symbols-rounded">schedule</span>
+      Pending
+    </span>
+  </div>
+</div>\n\n`;
       }
     } catch (e) {
       return match;
@@ -212,12 +250,13 @@ const renderedHtml = computed(() => {
 });
 
 function handleContentClick(event) {
-  const target = event.target;
-  if (target.tagName === 'IMG') {
-    const src = target.getAttribute('src');
-    const alt = target.getAttribute('alt') || 'Scene Illustration';
-    const prompt = target.dataset.prompt ? decodeURIComponent(target.dataset.prompt) : '';
-    const title = target.dataset.title || alt;
+  // 1. Clicked on an image to preview
+  const imgTarget = event.target.closest('img');
+  if (imgTarget) {
+    const src = imgTarget.getAttribute('src');
+    const alt = imgTarget.getAttribute('alt') || 'Scene Illustration';
+    const prompt = imgTarget.dataset.prompt ? decodeURIComponent(imgTarget.dataset.prompt) : '';
+    const title = imgTarget.dataset.title || alt;
 
     emit('preview', {
       src,
@@ -227,6 +266,38 @@ function handleContentClick(event) {
       details: {
         Workspace: props.stem,
         Context: 'Story Reader'
+      }
+    });
+    return;
+  }
+
+  // 2. Clicked on a scene placeholder to inspect critical info and prompt
+  const placeholderTarget = event.target.closest('.story-scene-placeholder');
+  if (placeholderTarget) {
+    const tagId = placeholderTarget.dataset.tagId || '';
+    const tagType = placeholderTarget.dataset.tagType || 'image';
+    const tagSection = placeholderTarget.dataset.tagSection || '';
+    const prompt = placeholderTarget.dataset.prompt ? decodeURIComponent(placeholderTarget.dataset.prompt) : '';
+    const status = placeholderTarget.dataset.status || 'Pending';
+
+    let matched = null;
+    if (tagType === 'video') {
+      matched = props.videos.find(v => v.id === tagId || v.name.startsWith(tagId + '.') || v.name.includes(tagId));
+    } else {
+      matched = props.images.find(img => img.id === tagId || img.name.startsWith(tagId + '.') || img.name.includes(tagId));
+    }
+
+    emit('preview', {
+      src: matched ? matched.assetUrl : '',
+      title: `[${tagType.toUpperCase()}] ${tagId}${tagSection ? ' - ' + tagSection : ''}`,
+      type: tagType,
+      prompt,
+      details: {
+        TagID: tagId,
+        Type: tagType === 'video' ? 'Video Scene' : 'Image Scene',
+        Section: tagSection || 'N/A',
+        Status: status,
+        Asset: matched ? matched.name : 'Pending generation'
       }
     });
   }
