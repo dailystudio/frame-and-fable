@@ -13,6 +13,11 @@ import mimetypes
 import webbrowser
 import base64
 import subprocess
+import threading
+import time
+import uuid
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote
@@ -22,6 +27,17 @@ PROJECT_ROOT = VIEWER_DIR.parent
 DEFAULT_OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 DEFAULT_EXAMPLES_DIR = PROJECT_ROOT / "examples"
 DIST_DIR = VIEWER_DIR / "dist"
+
+# Automatically load persisted GEMINI_API_KEY from outputs/.gemini_api_key if available
+_KEY_FILE = DEFAULT_OUTPUTS_DIR / ".gemini_api_key"
+if not os.environ.get("GEMINI_API_KEY") and _KEY_FILE.exists():
+    try:
+        with open(_KEY_FILE, "r", encoding="utf-8") as _kf:
+            _saved_key = _kf.read().strip()
+            if _saved_key:
+                os.environ["GEMINI_API_KEY"] = _saved_key
+    except Exception:
+        pass
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -34,6 +50,7 @@ try:
         build_prompt,
         update_media_tag_prompts,
         extract_media_tags,
+        extract_tag_context,
         StoryWorkspace
     )
 except Exception:
@@ -43,6 +60,7 @@ except Exception:
     build_prompt = None
     update_media_tag_prompts = None
     extract_media_tags = None
+    extract_tag_context = None
     StoryWorkspace = None
 
 
@@ -64,10 +82,102 @@ DEFAULT_SETTINGS = {
 }
 
 
+class TaskManager:
+    def __init__(self, default_outputs_dir: Path):
+        self.default_outputs_dir = default_outputs_dir
+        self.lock = threading.RLock()
+        self._running_procs = {}  # task_id -> subprocess.Popen
+
+    def _get_history_file(self, outputs_dir: Path, stem: str) -> Path:
+        return outputs_dir / stem / ".generation_tasks.json"
+
+    def load_tasks(self, outputs_dir: Path, stem: str) -> list:
+        history_file = self._get_history_file(outputs_dir, stem)
+        if not history_file.exists():
+            return []
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                tasks = json.load(f)
+                if isinstance(tasks, list):
+                    modified = False
+                    for t in tasks:
+                        if t.get("status") == "running" and t.get("id") not in self._running_procs:
+                            t["status"] = "failed"
+                            t["error"] = "Task interrupted (server was stopped or restarted)"
+                            if not t.get("finished_at"):
+                                t["finished_at"] = datetime.now().isoformat()
+                            modified = True
+                    if modified:
+                        self.save_tasks(outputs_dir, stem, tasks)
+                    return tasks
+                return []
+        except Exception as e:
+            print(f"[TaskManager] Error loading tasks for {stem}: {e}")
+            return []
+
+    def save_tasks(self, outputs_dir: Path, stem: str, tasks: list):
+        history_file = self._get_history_file(outputs_dir, stem)
+        try:
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(tasks[:200], f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[TaskManager] Error saving tasks for {stem}: {e}")
+
+    def add_task(self, outputs_dir: Path, stem: str, task: dict):
+        with self.lock:
+            tasks = self.load_tasks(outputs_dir, stem)
+            tasks.insert(0, task)
+            self.save_tasks(outputs_dir, stem, tasks)
+
+    def update_task(self, outputs_dir: Path, stem: str, task_id: str, updates: dict):
+        with self.lock:
+            tasks = self.load_tasks(outputs_dir, stem)
+            for t in tasks:
+                if t.get("id") == task_id:
+                    t.update(updates)
+                    break
+            self.save_tasks(outputs_dir, stem, tasks)
+
+    def clear_tasks(self, outputs_dir: Path, stem: str) -> list:
+        with self.lock:
+            tasks = self.load_tasks(outputs_dir, stem)
+            kept = [t for t in tasks if t.get("status") == "running"]
+            self.save_tasks(outputs_dir, stem, kept)
+            return kept
+
+    def cancel_task(self, outputs_dir: Path, stem: str, task_id: str) -> bool:
+        with self.lock:
+            proc = self._running_procs.get(task_id)
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    self.update_task(outputs_dir, stem, task_id, {
+                        "status": "failed",
+                        "error": "Cancelled by user",
+                        "finished_at": datetime.now().isoformat()
+                    })
+                    return True
+                except Exception as e:
+                    print(f"[TaskManager] Error cancelling task {task_id}: {e}")
+            else:
+                self.update_task(outputs_dir, stem, task_id, {
+                    "status": "failed",
+                    "error": "Cancelled by user",
+                    "finished_at": datetime.now().isoformat()
+                })
+                return True
+        return False
+
+
+task_manager = TaskManager(DEFAULT_OUTPUTS_DIR)
+
+
 class StorybookViewerHandler(SimpleHTTPRequestHandler):
     outputs_dir = DEFAULT_OUTPUTS_DIR
     examples_dir = DEFAULT_EXAMPLES_DIR
     dist_dir = DIST_DIR
+    task_manager = task_manager
 
     def end_headers(self):
         # Enable CORS for local dev servers
@@ -89,6 +199,10 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         pathname = unquote(parsed.path)
+
+        if pathname == "/api/settings/api-key":
+            self.handle_api_save_api_key()
+            return
 
         settings_marker = "/settings"
         if pathname.startswith("/api/workspace/") and pathname.endswith(settings_marker):
@@ -145,12 +259,38 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             self.handle_api_enrich_prompts(stem)
             return
 
+        tasks_clear_marker = "/tasks/clear"
+        if tasks_clear_marker in pathname and pathname.startswith("/api/workspace/"):
+            sub = pathname[len("/api/workspace/"):]
+            stem = sub[:sub.index(tasks_clear_marker)]
+            self.handle_api_clear_tasks(stem)
+            return
+
+        tasks_retry_marker = "/tasks/retry"
+        if tasks_retry_marker in pathname and pathname.startswith("/api/workspace/"):
+            sub = pathname[len("/api/workspace/"):]
+            stem = sub[:sub.index(tasks_retry_marker)]
+            self.handle_api_retry_task(stem)
+            return
+
+        tasks_cancel_marker = "/tasks/cancel"
+        if tasks_cancel_marker in pathname and pathname.startswith("/api/workspace/"):
+            sub = pathname[len("/api/workspace/"):]
+            stem = sub[:sub.index(tasks_cancel_marker)]
+            self.handle_api_cancel_task(stem)
+            return
+
         self.send_json_response({"error": "POST endpoint not found"}, status=404)
 
 
     def handle_request(self, is_head=False):
         parsed = urlparse(self.path)
         pathname = unquote(parsed.path)
+
+        # 0. API: /api/settings/api-key
+        if pathname == "/api/settings/api-key":
+            self.handle_api_get_api_key(is_head=is_head)
+            return
 
         # 1. API: /api/workspaces
         if pathname == "/api/workspaces":
@@ -161,6 +301,12 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         if pathname.startswith("/api/workspace/") and pathname.endswith("/settings"):
             stem = pathname[len("/api/workspace/"):-len("/settings")].strip("/")
             self.handle_api_get_settings(stem, is_head=is_head)
+            return
+
+        # 1.6 API: /api/workspace/<stem>/tasks
+        if pathname.startswith("/api/workspace/") and pathname.endswith("/tasks"):
+            stem = pathname[len("/api/workspace/"):-len("/tasks")].strip("/")
+            self.handle_api_get_tasks(stem, is_head=is_head)
             return
 
         # 2. API: /api/workspace/<stem>
@@ -238,6 +384,36 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             payload = json.loads(body.decode("utf-8")) if body else {}
             saved = self.save_workspace_settings(stem, payload)
             self.send_json_response({"success": True, "settings": saved})
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
+
+    def handle_api_get_api_key(self, is_head=False):
+        key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+        masked = f"{key[:6]}...{key[-4:]}" if len(key) >= 12 else ("******" if key else "")
+        self.send_json_response({
+            "has_key": bool(key),
+            "masked_key": masked
+        }, is_head=is_head)
+
+    def handle_api_save_api_key(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            key = (payload.get("api_key") or "").strip()
+            if key:
+                os.environ["GEMINI_API_KEY"] = key
+                self.outputs_dir.mkdir(parents=True, exist_ok=True)
+                key_file = self.outputs_dir / ".gemini_api_key"
+                with open(key_file, "w", encoding="utf-8") as f:
+                    f.write(key)
+            else:
+                os.environ.pop("GEMINI_API_KEY", None)
+                key_file = self.outputs_dir / ".gemini_api_key"
+                if key_file.exists():
+                    key_file.unlink()
+            masked = f"{key[:6]}...{key[-4:]}" if len(key) >= 12 else ("******" if key else "")
+            self.send_json_response({"success": True, "has_key": bool(key), "masked_key": masked})
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
 
@@ -847,95 +1023,230 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
 
+    def start_generation_task(self, stem: str, payload: dict) -> dict:
+        tag_id = payload.get("tag_id")
+        section = payload.get("section")
+        media_type = payload.get("type", "image")
+        ratio = payload.get("ratio")
+        size = payload.get("size")
+        model = payload.get("model")
+
+        ws_dir = self.outputs_dir / stem
+        output_md = ws_dir / f"{stem}-output.md"
+        if not output_md.exists():
+            md_files = [f for f in ws_dir.glob("*.md") if not f.name.startswith(".")]
+            if md_files:
+                output_md = md_files[0]
+            else:
+                raise FileNotFoundError(f"No storybook markdown found in {ws_dir}")
+
+        ws_settings = self.load_workspace_settings(stem)
+        scene_override = ws_settings.get("scenes", {}).get(tag_id, {}) if tag_id else {}
+        global_type_cfg = ws_settings.get("global", {}).get(media_type, {})
+
+        effective_ratio = (
+            ratio if ratio and ratio != "inherit"
+            else scene_override.get("ratio")
+            or global_type_cfg.get("ratio")
+            or "16:9"
+        )
+
+        effective_size = (
+            size if size and size != "inherit"
+            else scene_override.get("size")
+            or global_type_cfg.get("size")
+            or "1K"
+        )
+
+        effective_model = (
+            model if model and model != "inherit"
+            else scene_override.get("model")
+            or global_type_cfg.get("model")
+            or ("gemini-3.1-flash-image" if media_type == "image" else "veo-2.0-generate-001")
+        )
+
+        py_exe = find_python_for_gemini() if find_python_for_gemini else sys.executable
+        storybook_script = PROJECT_ROOT / "storybook.py"
+        cmd = [
+            py_exe,
+            str(storybook_script),
+            "media", "generate",
+            str(output_md),
+            "--type", media_type,
+            "--force",
+        ]
+        if tag_id:
+            cmd.extend(["--id", tag_id])
+        if section:
+            cmd.extend(["--section", section])
+        if effective_ratio:
+            cmd.extend(["--ratio", str(effective_ratio)])
+        if effective_size:
+            cmd.extend(["--size", str(effective_size)])
+        if effective_model:
+            if media_type == "video":
+                cmd.extend(["--video-model", str(effective_model)])
+            else:
+                cmd.extend(["--model", str(effective_model)])
+
+        extra_prompt = (payload.get("extra_prompt") or scene_override.get("extra_prompt") or "").strip()
+        if extra_prompt:
+            cmd.extend(["--extra-prompt", extra_prompt])
+
+        api_key = (payload.get("api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+        if api_key:
+            os.environ["GEMINI_API_KEY"] = api_key
+            cmd.extend(["--api-key", api_key])
+
+        # Resolve prompt text from markdown if available
+        tag_prompt = ""
+        try:
+            with open(output_md, "r", encoding="utf-8") as f:
+                md_text = f.read()
+            if extract_media_tags:
+                all_tags = extract_media_tags(md_text)
+                for t in all_tags:
+                    if t.get("id") == tag_id:
+                        tag_prompt = t.get("prompt", "")
+                        break
+        except Exception:
+            pass
+
+        task_id = f"task_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        now_iso = datetime.now().isoformat()
+
+        task = {
+            "id": task_id,
+            "stem": stem,
+            "type": media_type,
+            "tag_id": tag_id,
+            "section": section,
+            "prompt": tag_prompt or payload.get("prompt", ""),
+            "model": effective_model,
+            "ratio": effective_ratio,
+            "size": effective_size,
+            "extra_prompt": extra_prompt,
+            "status": "running",
+            "started_at": now_iso,
+            "finished_at": None,
+            "duration_sec": 0,
+            "command": " ".join(cmd),
+            "stdout": "",
+            "stderr": "",
+            "error": None,
+            "asset_url": None,
+            "payload": payload
+        }
+        self.task_manager.add_task(self.outputs_dir, stem, task)
+
+        def worker():
+            start_t = time.time()
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.task_manager._running_procs[task_id] = proc
+                stdout, stderr = proc.communicate()
+                self.task_manager._running_procs.pop(task_id, None)
+
+                duration = round(time.time() - start_t, 2)
+                finished_iso = datetime.now().isoformat()
+
+                # Check if asset was produced
+                asset_url = None
+                if tag_id:
+                    exts = [".png", ".jpg", ".jpeg", ".webp"] if media_type == "image" else [".mp4", ".webm"]
+                    target_dir = ws_dir / ("images" if media_type == "image" else "videos")
+                    for ext in exts:
+                        p = target_dir / f"{tag_id}{ext}"
+                        if p.exists():
+                            asset_url = f"/api/asset/{stem}/{target_dir.name}/{p.name}"
+                            break
+
+                if proc.returncode != 0:
+                    err_msg = stderr.strip() or stdout.strip() or f"Process exited with code {proc.returncode}"
+                    self.task_manager.update_task(self.outputs_dir, stem, task_id, {
+                        "status": "failed",
+                        "error": err_msg,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "duration_sec": duration,
+                        "finished_at": finished_iso
+                    })
+                else:
+                    self.task_manager.update_task(self.outputs_dir, stem, task_id, {
+                        "status": "completed",
+                        "error": None,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "duration_sec": duration,
+                        "finished_at": finished_iso,
+                        "asset_url": asset_url
+                    })
+            except Exception as ex:
+                self.task_manager._running_procs.pop(task_id, None)
+                duration = round(time.time() - start_t, 2)
+                self.task_manager.update_task(self.outputs_dir, stem, task_id, {
+                    "status": "failed",
+                    "error": str(ex),
+                    "duration_sec": duration,
+                    "finished_at": datetime.now().isoformat()
+                })
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        return task
+
     def handle_api_generate(self, stem):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length > 0 else b"{}"
             payload = json.loads(body.decode("utf-8")) if body else {}
 
-            tag_id = payload.get("tag_id")
-            section = payload.get("section")
-            media_type = payload.get("type", "image")
-            ratio = payload.get("ratio")
-            size = payload.get("size")
-            model = payload.get("model")
+            task = self.start_generation_task(stem, payload)
+            self.send_json_response({
+                "success": True,
+                "task_id": task["id"],
+                "status": "running",
+                "tag_id": task.get("tag_id"),
+                "section": task.get("section"),
+                "type": task.get("type"),
+                "message": f"Started generation task {task['id']} for {task.get('tag_id') or 'all'}"
+            })
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
 
-            ws_dir = self.outputs_dir / stem
-            output_md = ws_dir / f"{stem}-output.md"
-            if not output_md.exists():
-                md_files = list(ws_dir.glob("*.md"))
-                if md_files:
-                    output_md = md_files[0]
-                else:
-                    self.send_json_response({"error": f"No storybook markdown found in {ws_dir}"}, status=404)
-                    return
+    def handle_api_get_tasks(self, stem, is_head=False):
+        tasks = self.task_manager.load_tasks(self.outputs_dir, stem)
+        self.send_json_response({"success": True, "tasks": tasks}, is_head=is_head)
 
-            ws_settings = self.load_workspace_settings(stem)
-            scene_override = ws_settings.get("scenes", {}).get(tag_id, {}) if tag_id else {}
-            global_type_cfg = ws_settings.get("global", {}).get(media_type, {})
+    def handle_api_clear_tasks(self, stem):
+        remaining = self.task_manager.clear_tasks(self.outputs_dir, stem)
+        self.send_json_response({"success": True, "tasks": remaining})
 
-            effective_ratio = (
-                ratio if ratio and ratio != "inherit"
-                else scene_override.get("ratio")
-                or global_type_cfg.get("ratio")
-                or "16:9"
-            )
+    def handle_api_retry_task(self, stem):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            task_id = payload.get("task_id")
+            tasks = self.task_manager.load_tasks(self.outputs_dir, stem)
+            target = next((t for t in tasks if t.get("id") == task_id), None)
+            if not target:
+                self.send_json_response({"error": f"Task '{task_id}' not found"}, status=404)
+                return
+            original_payload = target.get("payload") or {}
+            new_task = self.start_generation_task(stem, original_payload)
+            self.send_json_response({"success": True, "task_id": new_task["id"], "status": "running"})
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
 
-            effective_size = (
-                size if size and size != "inherit"
-                else scene_override.get("size")
-                or global_type_cfg.get("size")
-                or "1K"
-            )
-
-            effective_model = (
-                model if model and model != "inherit"
-                else scene_override.get("model")
-                or global_type_cfg.get("model")
-                or ("gemini-3.1-flash-image" if media_type == "image" else "veo-2.0-generate-001")
-            )
-
-            py_exe = find_python_for_gemini() if find_python_for_gemini else sys.executable
-            storybook_script = Path(__file__).resolve().parent.parent / "storybook.py"
-            cmd = [
-                py_exe,
-                str(storybook_script),
-                "media", "generate",
-                str(output_md),
-                "--type", media_type,
-                "--force",
-            ]
-            if tag_id:
-                cmd.extend(["--id", tag_id])
-            if section:
-                cmd.extend(["--section", section])
-            if effective_ratio:
-                cmd.extend(["--ratio", str(effective_ratio)])
-            if effective_size:
-                cmd.extend(["--size", str(effective_size)])
-            if effective_model:
-                if media_type == "video":
-                    cmd.extend(["--video-model", str(effective_model)])
-                else:
-                    cmd.extend(["--model", str(effective_model)])
-
-            # Execute generation
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                self.send_json_response({
-                    "success": False,
-                    "error": res.stderr.strip() or res.stdout.strip(),
-                    "stdout": res.stdout,
-                    "stderr": res.stderr
-                }, status=500)
-            else:
-                self.send_json_response({
-                    "success": True,
-                    "message": f"Generated successfully for {tag_id or section or 'all'}",
-                    "stdout": res.stdout,
-                    "tag_id": tag_id,
-                    "section": section
-                })
+    def handle_api_cancel_task(self, stem):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            payload = json.loads(body.decode("utf-8")) if body else {}
+            task_id = payload.get("task_id")
+            cancelled = self.task_manager.cancel_task(self.outputs_dir, stem, task_id)
+            self.send_json_response({"success": True, "cancelled": cancelled})
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
 
@@ -965,6 +1276,28 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             use_ai = payload.get("use_ai", False)
 
             ws_dir = self.outputs_dir / stem
+
+            # Resolve narrative context from workspace markdown if before_text or after_text are missing
+            if tag_id and (not before_text or not after_text):
+                md_files = list(ws_dir.glob("*-output.md")) + list(ws_dir.glob("*.md"))
+                for md_file in md_files:
+                    if md_file.name.endswith(".backup.md"):
+                        continue
+                    try:
+                        with open(md_file, "r", encoding="utf-8") as mf:
+                            md_content = mf.read()
+                        if tag_id in md_content and extract_tag_context:
+                            ctx = extract_tag_context(md_content, tag_id)
+                            if not before_text and ctx.get("before_text"):
+                                before_text = ctx["before_text"]
+                            if not after_text and ctx.get("after_text"):
+                                after_text = ctx["after_text"]
+                            if not section and ctx.get("section"):
+                                section = ctx["section"]
+                            break
+                    except Exception:
+                        pass
+
             # Load characters from workspace
             characters = []
             for char_base in ["char-ref", "characters"]:
@@ -1004,12 +1337,149 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             else:
                 prompt = f"[{tag_type.upper()}] {section}: {before_text} {after_text}".strip()
 
+            # AI enrichment: use Gemini to refine the template prompt
+            ai_refined = False
+            start_time = time.time()
+            start_iso = datetime.now().isoformat()
+            if use_ai and prompt:
+                try:
+                    from google import genai
+                    resolved_key = (payload.get("api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+                    if resolved_key:
+                        os.environ["GEMINI_API_KEY"] = resolved_key
+                        ai_client = genai.Client(api_key=resolved_key, http_options={"timeout": 60000})
+
+                        primary_focus = after_text if after_text else before_text
+                        sec_env = before_text if (after_text and before_text) else ""
+
+                        # Match characters from workspace in primary and secondary context
+                        matched_primary_chars = []
+                        for c in characters:
+                            cname = c.get("name", "")
+                            if not cname:
+                                continue
+                            tokens = [cname]
+                            if "·" in cname:
+                                tokens.extend([part.strip() for part in cname.split("·") if len(part.strip()) >= 2])
+                            role = c.get("role", "")
+                            for en_alias in re.findall(r'\b[A-Z][a-z]+\b', role):
+                                if len(en_alias) >= 4 and en_alias not in ["Main", "Character", "Protagonist", "Warrior", "Healer", "Wizard", "Adventurer"]:
+                                    tokens.append(en_alias)
+                            if any(tok in primary_focus for tok in tokens):
+                                matched_primary_chars.append(c)
+
+                        matched_sec_chars = []
+                        for c in characters:
+                            if c in matched_primary_chars:
+                                continue
+                            cname = c.get("name", "")
+                            if not cname:
+                                continue
+                            tokens = [cname]
+                            if "·" in cname:
+                                tokens.extend([part.strip() for part in cname.split("·") if len(part.strip()) >= 2])
+                            if any(tok in sec_env for tok in tokens):
+                                matched_sec_chars.append(c)
+
+                        ai_contents = [
+                            "You are a master Art Director for animated feature films and fantasy storybooks. "
+                            "Transform this narrative scene description into a visually stunning, production-ready image generation prompt.\n"
+                            f"Scene Description Draft: '{prompt}'.\n"
+                            f"PRIMARY FOCAL ACTION & SUBJECT (1st Priority): '{primary_focus}'.\n"
+                        ]
+                        if sec_env:
+                            ai_contents.append(f"SECONDARY / BACKGROUND CONTEXT (2nd Priority): '{sec_env}'.\n")
+
+                        if matched_primary_chars:
+                            char_info = []
+                            for c in matched_primary_chars:
+                                c_name = c.get("name")
+                                c_dna = c.get("visual_dna") or c.get("portrait_prompt") or ""
+                                char_info.append(f"- Character: {c_name} (Role: {c.get('role', '')})\n  Visual DNA / Features: {c_dna}")
+                            ai_contents.append(
+                                "\nCRITICAL HERO IDENTITY REQUIREMENTS:\n"
+                                f"The primary focus features this specific hero:\n" + "\n".join(char_info) + "\n"
+                                "1. You MUST feature this exact character as the main focal subject.\n"
+                                "2. You MUST explicitly name them in the prompt.\n"
+                                "3. You MUST faithfully incorporate their Visual DNA (age, build, clothing, beard/hair, props, magical effects).\n"
+                                "4. STRICTLY PROHIBITED: NEVER replace them with a generic adventurer, swordsman, or change their class/appearance.\n\n"
+                            )
+
+                        if matched_sec_chars:
+                            sec_char_names = ", ".join(c.get("name", "") for c in matched_sec_chars)
+                            ai_contents.append(f"Secondary character(s) present in background: {sec_char_names}.\n")
+
+                        ai_contents.append(
+                            "Requirements:\n"
+                            "1) The PRIMARY focal action and subject MUST strictly be the main focus of the composition.\n"
+                            "2) If a named hero is specified above, you MUST retain their exact name and physical traits.\n"
+                            "3) Specify precise camera framing and shot composition.\n"
+                            "4) Describe characters with concrete physical appearance details (hair, clothing, accessories, expressions).\n"
+                            "5) Detail the environment and props with tangible visual elements.\n"
+                            "6) Specify lighting quality, direction, color temperature, and atmospheric mood.\n"
+                            "7) Include the art style description.\n"
+                            "8) No spoken dialogue quotes. Purely visual and cinematic.\n"
+                            "9) Keep the same language as the input (Chinese stays Chinese, English stays English).\n"
+                            "10) Output ONLY the refined prompt text — no explanations, no labels, no quotation marks."
+                        )
+
+                        resp = ai_client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents="".join(ai_contents)
+                        )
+                        if resp and resp.text:
+                            candidate_text = resp.text.strip()
+                            # Check character fidelity: if primary characters were matched, ensure at least one is mentioned
+                            if matched_primary_chars:
+                                valid_hero = False
+                                for c in matched_primary_chars:
+                                    cname = c.get("name", "")
+                                    check_tokens = [cname]
+                                    if "·" in cname:
+                                        check_tokens.extend([part.strip() for part in cname.split("·") if len(part.strip()) >= 2])
+                                    if any(tok in candidate_text for tok in check_tokens):
+                                        valid_hero = True
+                                        break
+                                if valid_hero:
+                                    prompt = candidate_text
+                                    ai_refined = True
+                                else:
+                                    # Gemini omitted the hero name, do not discard the valid hero prompt
+                                    logger.warning("AI refinement omitted primary hero %s, preserving template prompt", [c.get("name") for c in matched_primary_chars])
+                            else:
+                                prompt = candidate_text
+                                ai_refined = True
+                except Exception as e:
+                    logger.warning("Error during AI prompt enrichment: %s", e)
+
+            # Record prompt task in history
+            task_id = f"prompt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            duration = round(time.time() - start_time, 2)
+            self.task_manager.add_task(self.outputs_dir, stem, {
+                "id": task_id,
+                "stem": stem,
+                "type": "prompt",
+                "tag_id": tag_id,
+                "section": section,
+                "prompt": prompt,
+                "model": "gemini-2.5-flash" if ai_refined else "template",
+                "status": "completed",
+                "started_at": start_iso,
+                "finished_at": datetime.now().isoformat(),
+                "duration_sec": duration,
+                "ai_refined": ai_refined,
+                "stdout": f"Prompt generated for tag '{tag_id or 'new'}' ({'AI refined via gemini-2.5-flash' if ai_refined else 'Template based'}).",
+                "stderr": "",
+                "error": None
+            })
+
             self.send_json_response({
                 "success": True,
                 "prompt": prompt,
                 "tag_id": tag_id,
                 "section": section,
-                "type": tag_type
+                "type": tag_type,
+                "ai_refined": ai_refined
             })
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
@@ -1161,6 +1631,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             self.send_json_response({"error": str(e)}, status=500)
 
     def handle_api_enrich_prompts(self, stem: str):
+        start_time = time.time()
+        start_iso = datetime.now().isoformat()
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length > 0 else b"{}"
@@ -1168,6 +1640,9 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
 
             force = payload.get("force", False)
             use_ai = payload.get("use_ai", False)
+            api_key = (payload.get("api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+            if api_key:
+                os.environ["GEMINI_API_KEY"] = api_key
 
             md_path = self.get_workspace_markdown_path(stem)
             if not md_path or not md_path.exists():
@@ -1182,6 +1657,26 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 updated = update_media_tag_prompts(md_text, force=force, use_ai=use_ai, workspace=ws)
                 with open(md_path, "w", encoding="utf-8") as f:
                     f.write(updated)
+
+            # Record batch prompt task
+            task_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            duration = round(time.time() - start_time, 2)
+            self.task_manager.add_task(self.outputs_dir, stem, {
+                "id": task_id,
+                "stem": stem,
+                "type": "batch_prompt",
+                "tag_id": "All Tags",
+                "section": "",
+                "prompt": f"Batch enrich prompts (force={force}, use_ai={use_ai})",
+                "model": "gemini-2.5-flash" if use_ai else "template",
+                "status": "completed",
+                "started_at": start_iso,
+                "finished_at": datetime.now().isoformat(),
+                "duration_sec": duration,
+                "stdout": "Successfully enriched all media prompts in workspace markdown.",
+                "stderr": "",
+                "error": None
+            })
 
             self.send_json_response({
                 "success": True,

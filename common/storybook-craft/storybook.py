@@ -294,6 +294,8 @@ GO_ALIVE_HEROES_PROMPTS = {
     "vid_001": "【电影级全景开篇镜头】在中世纪奇幻大陆皮拉诺瓦（Pyranova），明媚温暖的金色阳光洒在连绵起伏的翠绿丘陵与金黄麦田上，麦浪如海洋般随风起伏。清澈透明的银光河蜿蜒穿过繁荣的中世纪市镇，河岸市集商旅马车络绎不绝，工匠铺里铁花飞溅。远景巍峨矗立着石砌城堡尖塔与庄严教堂钟楼。晨光柔和漫射，空气中漂浮着微小金色光尘，空间纵深宏大开阔。造型风格：3D定格动画/黏土雕塑质感与厚涂插画结合，造型饱满圆润，电影级暖金光影渲染。",
     "img_001": "【史诗级广角场景构图】中世纪繁华市镇的中心街景，高耸古朴的石砌城堡尖塔与庄严教堂钟楼在蔚蓝晴空下遥相辉映。铺着复古鹅卵石的街道上，孩童在喷泉旁奔跑嬉戏，酒馆半开的木门透出温暖炉火，吟游诗人在酒馆门口弹奏着木质鲁特琴。街道两旁摆满木桶、蔬果摊位与手工艺铺，暖黄色晨光倾泻在石墙与木瓦上，充满祥和安宁的生活气息。3D故事书艺术风格，手绘厚涂质感，温暖金琥珀色调。",
     "img_002": "【电影级广角低角度探索镜头】神秘深邃的古代史前文明地宫遗迹深处，地面覆盖着厚重的尘埃与坍塌的碎石。一架造型奇特、线条流畅古朴的史前“古老飞行器”金属残骸半掩埋在石堆与青苔之间，金属机翼上隐隐显露出神秘复杂的凹陷符文脉络。微弱的天光从地宫穹顶裂缝中垂直投下，形成神秘幽暗的丁达尔光束，历史沧桑感与未解之谜笼罩四周。高对比度戏剧光影，奇幻微缩景观质感。",
+    "img_046": "【史诗级广角场景构图】神秘深邃的史前地宫“风之墓穴”入口前，魁梧粗犷的矮人狂战士“磐石”——布洛克·铁盾（Brock Ironshield）昂首伫立。他头戴坚固的角盔，深褐卷曲胡须茂密威严，身披斜跨皮带与金属护肩，双手稳稳按立着那一面由古代合金重铸而成的参天巨盾。巨盾表面冷冽泛光、刻满古老防御符文，如同一道坚不可摧的移动城墙。身后地宫阴影中半掩着数架沉睡的史前古老飞行器残骸。温暖晨曦穿透穹顶裂隙，洒下微弱丁达尔光束，英雄气概与厚重历史感交融。造型风格：3D定格动画/黏土雕塑质感与厚涂插画结合，造型饱满圆润，电影级暖金光影渲染。",
+    "img_047": "【电影级中全景构图】神秘微光闪烁的古代遗迹藏书室内，“蓝焰”——阿尔文·蓝焰（Arven Blueflame）神情专注而庄严。这位身材矮壮、面容坚毅的博学法师，头戴深蓝色巫师尖顶帽，浓密的姜红胡须随魔力微风轻轻飘动，身着饰有淡蓝符文镶边的深靛蓝长袍。他左手持握着古朴粗糙的弯曲木质法杖，右手掌心托起一团清澈跳跃的幽蓝奥术魔焰。蓝焰的纯净光华映亮了石桌上摊开的古代金属飞行器符文图纸与以太核心部件，古老符文在蓝焰辉映下泛起共鸣微光。造型风格：3D定格动画/黏土雕塑质感与厚涂插画结合，造型饱满圆润，电影级暖金光影与冷调蓝焰交织。",
     "img_003": "【电影级中景特写镜头】“春愈者”米拉·布伦（矮小可爱的治愈师少女，头戴饰有米色十字徽章的软帽，栗色粗麻花辫垂在肩侧，身穿芥末黄束腰袍与棕色长裤）。她温柔地半跪在一座散发过载红光的古代机械装置前，双手掌心散发出柔和温润的翡翠绿治愈灵光，安抚着狂躁震颤的古代能量水晶。身旁佩戴着药剂木瓶与牛皮卷轴，神情专注仁慈。柔和光晕漫射，3D黏土质感故事书绘本风。",
     "vid_002": "【电影级全景灾难开篇镜头】原本平静祥和的中世纪村庄上空，晴空突然被狂暴撕裂开一道巨大的紫黑色“虚空裂隙”，宛如天空破碎的伤口。深不见底的时空漩涡翻滚咆哮，刺目的暗紫混沌电弧在云层与地面之间狂乱劈砍，大地剧烈颤抖，无数狰狞未知的异界虚空魔物从裂隙阴影中如潮水般汹涌倾泻而出。暗调冷紫光与闪电交织，压迫感十足的史诗灾变全景。",
     "img_004": "【电影级动态中景对峙构图】突变降临的村落边缘，博学矮人法师阿尔文·蓝焰（身着深靛蓝星纹长袍，头戴巫师尖帽，浓密姜红胡须）紧锁眉头，双手紧握木法杖，杖尖镶嵌的法球迸发出剧烈颤抖的幽蓝奥术光芒；身旁矮人狂战士布洛克·铁盾（头戴角盔，身形魁梧，皮带斜跨健硕胸膛）怒目圆睁，双手紧握沉重战锤与厚重金属巨盾，呈警惕御敌战斗姿态。远处地面裂隙蔓延，幽蓝法力光辉照亮两人凝重的面庞。",
@@ -880,6 +882,82 @@ def extract_media_tags(markdown_text: str) -> List[Dict[str, Any]]:
 
     tags.sort(key=lambda x: x.get("_span", (0, 0))[0])
     return tags
+
+
+def extract_tag_context(markdown_text: str, tag_id: str) -> Dict[str, Any]:
+    """
+    Extracts the narrative context (preceding and following paragraphs) for a specific tag
+    from markdown text according to the core narrative priority rules:
+    - Within the section containing the tag:
+      - Following paragraph is 1st priority (after_text).
+      - Paragraph before it is 2nd priority (before_text).
+      - If it is the last paragraph of the section (no following paragraph before next heading or EOF),
+        the paragraph before it becomes 1st priority (is_last_in_section=True, after_text="").
+    """
+    blocks = split_markdown_into_blocks(markdown_text)
+
+    def is_narrative_paragraph(b: MarkdownBlock) -> bool:
+        if b.block_type != MarkdownBlock.TYPE_PARAGRAPH:
+            return False
+        stripped = b.content.strip()
+        # Exclude standalone markdown images like ![img_001](...)
+        if re.match(r"^!\[.*?\]\(.*?\)$", stripped):
+            return False
+        # Exclude existing tag strings
+        if TAG_JSON_REGEX.search(stripped) or TAG_KV_REGEX.search(stripped):
+            return False
+        u, _, _ = count_story_units(stripped)
+        return u > 0
+
+    id_pattern = re.compile(rf'id["\'=:\s]+{re.escape(tag_id)}\b')
+
+    tag_block_idx = -1
+    for i, b in enumerate(blocks):
+        if id_pattern.search(b.raw_text):
+            tag_block_idx = i
+            break
+
+    if tag_block_idx == -1:
+        return {
+            "section": "",
+            "before_text": "",
+            "after_text": "",
+            "is_last_in_section": False
+        }
+
+    # Determine section title by looking backwards for nearest heading
+    section_title = ""
+    for j in range(tag_block_idx - 1, -1, -1):
+        if blocks[j].block_type in (MarkdownBlock.TYPE_H1, MarkdownBlock.TYPE_HEADING):
+            section_title = blocks[j].content.strip()
+            break
+
+    # Look backwards for previous narrative paragraph in same section
+    before_text = ""
+    for j in range(tag_block_idx - 1, -1, -1):
+        if blocks[j].block_type in (MarkdownBlock.TYPE_H1, MarkdownBlock.TYPE_HEADING):
+            break
+        if is_narrative_paragraph(blocks[j]):
+            before_text = blocks[j].content.strip()
+            break
+
+    # Look forwards for next narrative paragraph in same section
+    after_text = ""
+    is_last_in_section = True
+    for j in range(tag_block_idx + 1, len(blocks)):
+        if blocks[j].block_type in (MarkdownBlock.TYPE_H1, MarkdownBlock.TYPE_HEADING):
+            break
+        if is_narrative_paragraph(blocks[j]):
+            after_text = blocks[j].content.strip()
+            is_last_in_section = False
+            break
+
+    return {
+        "section": section_title,
+        "before_text": before_text,
+        "after_text": after_text,
+        "is_last_in_section": is_last_in_section
+    }
 
 
 def remove_media_tags(markdown_text: str) -> str:
@@ -2287,7 +2365,8 @@ def compose_reference_prompt(
     style_prompt: Optional[str] = None,
     has_style_image: bool = True,
     character_refs: Optional[List[Dict[str, Any]]] = None,
-    tag_type: str = "image"
+    tag_type: str = "image",
+    extra_prompt: Optional[str] = None
 ) -> str:
     """
     Composes a multimodal reference prompt enforcing strict role separation between
@@ -2348,6 +2427,10 @@ def compose_reference_prompt(
     if style_prompt and style_prompt.strip():
         sections.append(f"[ARTISTIC STYLE SPECIFICATION]\n{style_prompt.strip()}")
 
+    # 6. Additional Scene Directives / Extra Prompt
+    if extra_prompt and extra_prompt.strip():
+        sections.append(f"[ADDITIONAL SCENE DIRECTIVES & CUSTOM PROMPT]\n{extra_prompt.strip()}")
+
     return "\n\n".join(sections)
 
 
@@ -2356,7 +2439,8 @@ def resolve_tag_references(
     workspace: Optional[StoryWorkspace] = None,
     characters: Optional[List[Dict[str, Any]]] = None,
     style_data: Optional[Dict[str, Any]] = None,
-    markdown_path: Optional[Union[str, Path]] = None
+    markdown_path: Optional[Union[str, Path]] = None,
+    extra_prompt: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Resolves the complete reference context for a media tag:
@@ -2456,7 +2540,8 @@ def resolve_tag_references(
         style_prompt=active_style.get("style_prompt", ""),
         has_style_image=style_img_path is not None,
         character_refs=char_refs_info,
-        tag_type=tag_type
+        tag_type=tag_type,
+        extra_prompt=extra_prompt
     )
 
     # Build reference image paths list for gemini-image.py (-i args)
@@ -2468,6 +2553,8 @@ def resolve_tag_references(
     # Build CLI Command String
     md_file_arg = str(markdown_path) if markdown_path else f"outputs/{workspace.root_dir.name if hasattr(workspace, 'root_dir') else getattr(workspace, 'stem', 'story')}/{getattr(workspace, 'stem', 'story')}-output.md"
     cli_command = f"python3 storybook.py media generate {md_file_arg} --id {tag_id}"
+    if extra_prompt and extra_prompt.strip():
+        cli_command = f"{cli_command} --extra-prompt \"{extra_prompt.strip()}\""
 
     return {
         "tag_id": tag_id,
@@ -2499,7 +2586,8 @@ def generate_media_assets(
     api_key: Optional[str] = None,
     dry_run: bool = False,
     verbose: bool = False,
-    workspace: Optional[StoryWorkspace] = None
+    workspace: Optional[StoryWorkspace] = None,
+    extra_prompt: Optional[str] = None
 ) -> Tuple[str, int]:
     """
     Extracts pending tags with prompts, generates image and video assets using Google GenAI / gemini-image.py,
@@ -2618,7 +2706,8 @@ def generate_media_assets(
 
     try:
         from google import genai
-        client = genai.Client(api_key=resolved_key)
+        # google.genai timeout is in milliseconds: 300,000 ms = 5 mins
+        client = genai.Client(api_key=resolved_key, http_options={"timeout": 300000})
     except ImportError:
         client = None
 
@@ -2641,13 +2730,20 @@ def generate_media_assets(
         tag_image_size = t_scene_cfg.get("size") or t_global_cfg.get("size") or image_size
         tag_image_model = t_scene_cfg.get("model") or t_global_cfg.get("model") or image_model
         tag_video_model = t_scene_cfg.get("model") or t_global_cfg.get("model") or video_model
+        tag_extra_prompt = (
+            extra_prompt
+            or t_scene_cfg.get("extra_prompt")
+            or t.get("extra_prompt")
+            or ""
+        ).strip()
 
         # Resolve references and compose model prompt with strict anti-modification template
         ref_info = resolve_tag_references(
             tag=t,
             workspace=workspace,
             characters=workspace_chars,
-            style_data={"style_name": "Art Style", "style_prompt": active_style_prompt} if active_style_prompt else None
+            style_data={"style_name": "Art Style", "style_prompt": active_style_prompt} if active_style_prompt else None,
+            extra_prompt=tag_extra_prompt
         )
         composed_model_prompt = ref_info["composed_prompt"]
         all_ref_image_paths = list(ref_info["ref_image_paths"])
@@ -2697,9 +2793,14 @@ def generate_media_assets(
                     cmd.extend(["--api-key", resolved_key])
 
                 try:
-                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
                     if res.returncode != 0:
-                        print(f"  Error from gemini-image: {res.stderr.strip()}", file=sys.stderr)
+                        if res.returncode == -15 or res.returncode == 143:
+                            print(f"  Error: gemini-image process was cancelled or killed by signal 15 (SIGTERM).", file=sys.stderr)
+                        elif res.returncode == -9 or res.returncode == 137:
+                            print(f"  Error: gemini-image process was killed by signal 9 (SIGKILL / Out-of-Memory).", file=sys.stderr)
+                        else:
+                            print(f"  Error from gemini-image (exit code {res.returncode}): {res.stderr.strip()}", file=sys.stderr)
                     else:
                         if not target_file.exists():
                             cand_0 = target_file.parent / f"{target_file.stem}_0{target_file.suffix}"
@@ -2709,6 +2810,8 @@ def generate_media_assets(
                             image_generated = True
                         else:
                             print(f"  Warning: gemini-image exited with 0 but {target_file} was not found.", file=sys.stderr)
+                except subprocess.TimeoutExpired:
+                    print(f"  Error: gemini-image timed out after 600 seconds.", file=sys.stderr)
                 except Exception as e:
                     print(f"  Error invoking gemini-image: {e}", file=sys.stderr)
 
@@ -3451,6 +3554,7 @@ def main():
     p_m_gen.add_argument("--style-prompt", dest="style_prompt", help="Text prompt specifying the visual art style.")
     p_m_gen.add_argument("--char-refs", "--char-ref", dest="char_refs", action="append", help="Character reference mapping: Name:image_path, ...")
     p_m_gen.add_argument("--style-ref", "--style-refs", dest="style_refs", action="append", help="Style reference image(s): image1.png, image2.png, ...")
+    p_m_gen.add_argument("--extra-prompt", dest="extra_prompt", help="Extra prompt directives to append to the generation prompt.")
     p_m_gen.add_argument("--api-key", help="Gemini API key.")
     p_m_gen.add_argument("--dry-run", action="store_true", help="Preview tags and output files without generating.")
 
@@ -3865,7 +3969,8 @@ def main():
                 style_prompt=getattr(args, "style_prompt", None),
                 api_key=args.api_key,
                 dry_run=args.dry_run,
-                workspace=workspace
+                workspace=workspace,
+                extra_prompt=getattr(args, "extra_prompt", None)
             )
             target_out = args.output or (args.input_file if args.in_place else str(workspace.output_md))
             if not args.dry_run or args.output or args.in_place:

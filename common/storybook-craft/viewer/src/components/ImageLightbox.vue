@@ -15,351 +15,438 @@
           </span>
           <span class="sheet-title">{{ mediaTitle || 'Scene Inspector' }}</span>
         </div>
-        <button
-          type="button"
-          class="clean-icon-btn close-btn"
-          aria-label="Close dialog"
-          @click="close"
-        >
-          <span class="material-symbols-rounded">close</span>
-        </button>
-      </header>
-
-      <!-- Media Content Area -->
-      <div class="sheet-body">
-        <!-- 1. Generated Asset Viewport (if generated) -->
-        <div v-if="mediaSrc" class="media-viewport">
-          <video
-            v-if="mediaType === 'video'"
-            :src="mediaSrc"
-            controls
-            autoplay
-            class="media-elem"
-          ></video>
-          <img
-            v-else
-            :src="mediaSrc"
-            :alt="mediaTitle"
-            class="media-elem"
-          />
-        </div>
-
-        <!-- 2. Pending Hero Banner (if not yet generated) -->
-        <div v-else class="pending-hero clean-card">
-          <div class="pending-hero-left">
-            <span class="material-symbols-rounded pending-hero-icon">schedule</span>
-            <div>
-              <h4 class="pending-hero-title">Scene Pending Generation</h4>
-              <p class="pending-hero-sub">Review the multimodal prompt template, attached style reference, and character reference below.</p>
-            </div>
-          </div>
+        <div class="head-actions">
           <button
-            v-if="cliCommand"
             type="button"
-            class="clean-btn clean-btn-sm"
-            @click="copyText(cliCommand, 'cli')"
+            class="clean-btn clean-btn-xs jump-prompt-head-btn"
+            title="Focus prompt inspector"
+            @click="scrollToPrompt"
           >
-            <span class="material-symbols-rounded">{{ copiedKey === 'cli' ? 'check' : 'terminal' }}</span>
-            {{ copiedKey === 'cli' ? 'Command Copied' : 'Copy CLI Command' }}
+            <span class="material-symbols-rounded">psychology</span>
+            <span>Prompt</span>
+          </button>
+          <button
+            type="button"
+            class="clean-icon-btn close-btn"
+            aria-label="Close dialog"
+            @click="close"
+          >
+            <span class="material-symbols-rounded">close</span>
           </button>
         </div>
+      </header>
 
-        <!-- 2.5 Action Bar: Generate / Regenerate Asset & Settings -->
-        <div v-if="tagId" class="lightbox-action-bar clean-card">
-          <div class="action-bar-left">
-            <div class="status-indicator" :class="{ 'is-generated': !!mediaSrc, 'is-pending': !mediaSrc }">
-              <span class="status-dot"></span>
-              <strong>{{ mediaSrc ? 'Generated Scene' : 'Pending Generation' }}</strong>
-              <span class="action-tag-id">({{ tagId }})</span>
+      <!-- Modal Body (Two columns on desktop, single column on narrow screens) -->
+      <div ref="sheetBodyRef" class="sheet-body">
+        <div class="lightbox-grid">
+          <!-- Left Column: Visual Media & Reference Showcase -->
+          <div class="lightbox-col-visuals">
+            <!-- 1. Generated Asset Viewport (if generated) -->
+            <div v-if="mediaSrc" class="media-viewport">
+              <video
+                v-if="mediaType === 'video'"
+                :src="mediaSrc"
+                controls
+                autoplay
+                class="media-elem"
+              ></video>
+              <img
+                v-else
+                :src="mediaSrc"
+                :alt="mediaTitle"
+                class="media-elem"
+              />
             </div>
 
-            <!-- Settings: Aspect Ratio & Resolution with Global Inheritance -->
-            <div class="gen-config-group">
-              <div class="config-item" title="Output Aspect Ratio">
-                <span class="material-symbols-rounded config-icon">aspect_ratio</span>
-                <select
-                  v-model="selectedRatio"
-                  class="config-select"
-                  :class="{ 'is-custom-select': selectedRatio !== 'inherit' }"
-                  @change="onConfigChange"
-                >
-                  <option value="inherit">Inherit Global ({{ currentGlobalRatio }})</option>
-                  <option value="16:9">16:9 (Landscape)</option>
-                  <option value="4:3">4:3 (Standard)</option>
-                  <option value="1:1">1:1 (Square)</option>
-                  <option value="3:4">3:4 (Portrait)</option>
-                  <option value="9:16">9:16 (Story / Vertical)</option>
-                  <option value="21:9">21:9 (Ultrawide)</option>
-                </select>
+            <!-- 2. Pending Hero Banner (if not yet generated) -->
+            <div v-else class="pending-hero clean-card">
+              <div class="pending-hero-left">
+                <span class="material-symbols-rounded pending-hero-icon">schedule</span>
+                <div>
+                  <h4 class="pending-hero-title">Scene Pending Generation</h4>
+                  <p class="pending-hero-sub">Review prompt directives and references before generating.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Reference Guides Showcase (Style Ref & Character Ref(s)) -->
+            <div v-if="styleRef || (characterRefs && characterRefs.length)" class="refs-section clean-card">
+              <div class="refs-header">
+                <span class="material-symbols-rounded refs-icon">collections</span>
+                <span class="refs-title">Reference Guides</span>
+                <span class="refs-subtitle">Visual reference images guiding aesthetics and characters.</span>
               </div>
 
-              <div v-if="mediaType === 'image'" class="config-item" title="Output Resolution Size">
-                <span class="material-symbols-rounded config-icon">photo_size_select_actual</span>
-                <select
-                  v-model="selectedSize"
-                  class="config-select"
-                  :class="{ 'is-custom-select': selectedSize !== 'inherit' }"
-                  @change="onConfigChange"
-                >
-                  <option value="inherit">Inherit Global ({{ currentGlobalSize }})</option>
-                  <option value="1K">1K (Standard HD)</option>
-                  <option value="2K">2K (QHD High-Res)</option>
-                  <option value="4K">4K (Ultra HD)</option>
-                </select>
+              <div class="refs-grid">
+                <!-- Style Reference Card -->
+                <div v-if="styleRef" class="ref-card style-ref-card">
+                  <div class="ref-thumb-wrap">
+                    <img v-if="styleRef.assetUrl" :src="styleRef.assetUrl" :alt="styleRef.style_name" class="ref-thumb" />
+                    <div v-else class="ref-thumb-ph">
+                      <span class="material-symbols-rounded">palette</span>
+                    </div>
+                  </div>
+                  <div class="ref-info">
+                    <div class="ref-tag-row">
+                      <span class="badge-role style-role">Style Reference</span>
+                      <span class="badge-always">Always Active</span>
+                    </div>
+                    <h5 class="ref-name">{{ styleRef.style_name || styleRef.name }}</h5>
+                    <p class="ref-desc">Guides artistic medium, textures, palette & lighting.</p>
+                    <div class="ref-upload-row">
+                      <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
+                        <span class="material-symbols-rounded">cloud_upload</span>
+                        <span>{{ isUploadingRef ? 'Uploading...' : 'Change' }}</span>
+                        <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="onUploadStyleRef" />
+                      </label>
+                      <button
+                        v-if="styleRef.assetUrl"
+                        type="button"
+                        class="clean-btn clean-btn-xs delete-ref-btn"
+                        :disabled="isUploadingRef"
+                        title="Delete this style reference image"
+                        @click="onDeleteStyleRef"
+                      >
+                        <span class="material-symbols-rounded">delete</span>
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Character Reference Card(s) -->
+                <template v-if="characterRefs && characterRefs.length">
+                  <div v-for="c in characterRefs" :key="c.name" class="ref-card char-ref-card">
+                    <div class="ref-thumb-wrap">
+                      <img v-if="c.assetUrl" :src="c.assetUrl" :alt="c.name" class="ref-thumb" />
+                      <div v-else class="ref-thumb-ph">
+                        <span class="material-symbols-rounded">face</span>
+                      </div>
+                    </div>
+                    <div class="ref-info">
+                      <div class="ref-tag-row">
+                        <span class="badge-role char-role">Character Reference</span>
+                        <span class="badge-matched">Matched</span>
+                      </div>
+                      <h5 class="ref-name">{{ c.name }}</h5>
+                      <p class="ref-desc">Preserves visual identity, features & costume.</p>
+                      <div class="ref-upload-row">
+                        <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
+                          <span class="material-symbols-rounded">cloud_upload</span>
+                          <span>{{ isUploadingRef ? 'Uploading...' : 'Change' }}</span>
+                          <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="e => onUploadCharRef(e, c.name)" />
+                        </label>
+                        <button
+                          v-if="c.assetUrl"
+                          type="button"
+                          class="clean-btn clean-btn-xs delete-ref-btn"
+                          :disabled="isUploadingRef"
+                          title="Delete this character reference photo"
+                          @click="onDeleteCharRef(c.name, c.assetUrl)"
+                        >
+                          <span class="material-symbols-rounded">delete</span>
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- No Character Matched Notice -->
+                <div v-else class="ref-card empty-char-card">
+                  <div class="ref-thumb-ph">
+                    <span class="material-symbols-rounded empty-ref-icon">landscape</span>
+                  </div>
+                  <div class="ref-info">
+                    <span class="badge-role generic-role">Environment Scene</span>
+                    <p class="ref-desc">No character references attached. Pure environment composition.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Meta Tags Pill Row -->
+            <div v-if="mediaDetails" class="meta-pills">
+              <span v-for="(val, key) in mediaDetails" :key="key" class="clean-badge">
+                <strong>{{ key }}:</strong> {{ val }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Right Column: Generation Controls, Extra Prompt & Prompt Inspector -->
+          <div class="lightbox-col-controls">
+            <!-- 1. Action Bar: Generate / Regenerate Asset & Settings -->
+            <div v-if="tagId" class="lightbox-action-bar clean-card">
+              <div class="action-bar-left">
+                <div class="status-indicator" :class="{ 'is-generated': !!mediaSrc, 'is-pending': !mediaSrc }">
+                  <span class="status-dot"></span>
+                  <strong>{{ mediaSrc ? 'Generated Scene' : 'Pending Generation' }}</strong>
+                  <span class="action-tag-id">({{ tagId }})</span>
+                </div>
+
+                <!-- Settings: Aspect Ratio & Resolution -->
+                <div class="gen-config-group">
+                  <div class="config-item" title="Output Aspect Ratio">
+                    <span class="material-symbols-rounded config-icon">aspect_ratio</span>
+                    <select
+                      v-model="selectedRatio"
+                      class="config-select"
+                      :class="{ 'is-custom-select': selectedRatio !== 'inherit' }"
+                      @change="onConfigChange"
+                    >
+                      <option value="inherit">Ratio: Inherit ({{ currentGlobalRatio }})</option>
+                      <option value="16:9">16:9 (Landscape)</option>
+                      <option value="4:3">4:3 (Standard)</option>
+                      <option value="1:1">1:1 (Square)</option>
+                      <option value="3:4">3:4 (Portrait)</option>
+                      <option value="9:16">9:16 (Story)</option>
+                      <option value="21:9">21:9 (Ultrawide)</option>
+                    </select>
+                  </div>
+
+                  <div v-if="mediaType === 'image'" class="config-item" title="Output Resolution Size">
+                    <span class="material-symbols-rounded config-icon">photo_size_select_actual</span>
+                    <select
+                      v-model="selectedSize"
+                      class="config-select"
+                      :class="{ 'is-custom-select': selectedSize !== 'inherit' }"
+                      @change="onConfigChange"
+                    >
+                      <option value="inherit">Size: Inherit ({{ currentGlobalSize }})</option>
+                      <option value="1K">1K (HD)</option>
+                      <option value="2K">2K (QHD)</option>
+                      <option value="4K">4K (UHD)</option>
+                    </select>
+                  </div>
+
+                  <div v-if="isSceneOverridden" class="lightbox-override-pill" title="Custom override active for this scene">
+                    <span class="status-dot dot-override"></span>
+                    <span>Custom Override</span>
+                    <button type="button" class="clean-btn-xs reset-pill-btn" @click="resetToGlobal">Reset</button>
+                  </div>
+                  <div v-else class="lightbox-inherit-pill" title="Inheriting workspace global defaults">
+                    <span class="status-dot dot-inherit"></span>
+                    <span>Inheriting Global</span>
+                  </div>
+                </div>
               </div>
 
-              <div v-if="isSceneOverridden" class="lightbox-override-pill" title="This scene has a custom override">
-                <span class="status-dot dot-override"></span>
-                <span>Custom Override</span>
-                <button type="button" class="clean-btn-xs reset-pill-btn" title="Reset back to global defaults" @click="resetToGlobal">
-                  Reset
+              <div class="action-bar-right">
+                <button
+                  type="button"
+                  class="clean-btn clean-btn-sm generate-action-btn"
+                  :class="{ 'is-loading': isGenerating }"
+                  :disabled="isGenerating"
+                  @click="triggerGeneration"
+                >
+                  <span class="material-symbols-rounded" :class="{ 'is-spinning': isGenerating }">
+                    {{ isGenerating ? 'sync' : (mediaSrc ? 'refresh' : 'auto_awesome') }}
+                  </span>
+                  <span>{{ isGenerating ? 'Generating...' : (mediaSrc ? 'Regenerate Scene' : 'Generate Asset Now') }}</span>
                 </button>
-              </div>
-              <div v-else class="lightbox-inherit-pill" title="Inheriting workspace global defaults">
-                <span class="status-dot dot-inherit"></span>
-                <span>Inheriting Global</span>
               </div>
             </div>
 
             <span v-if="generationStatusMsg" class="generation-status-text">
               {{ generationStatusMsg }}
             </span>
-          </div>
 
-          <div class="action-bar-right">
-            <button
-              type="button"
-              class="clean-btn clean-btn-sm generate-action-btn"
-              :class="{ 'is-loading': isGenerating }"
-              :disabled="isGenerating"
-              @click="triggerGeneration"
-            >
-              <span class="material-symbols-rounded" :class="{ 'is-spinning': isGenerating }">
-                {{ isGenerating ? 'sync' : (mediaSrc ? 'refresh' : 'auto_awesome') }}
-              </span>
-              <span>{{ isGenerating ? 'Generating via Gemini...' : (mediaSrc ? 'Regenerate Scene' : 'Generate Asset Now') }}</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- 3. Meta Tags Pill Row -->
-        <div v-if="mediaDetails" class="meta-pills">
-          <span v-for="(val, key) in mediaDetails" :key="key" class="clean-badge">
-            <strong>{{ key }}:</strong> {{ val }}
-          </span>
-        </div>
-
-        <!-- 4. Reference Guides Showcase (Style Ref & Character Ref(s)) -->
-        <div v-if="styleRef || (characterRefs && characterRefs.length)" class="refs-section clean-card">
-          <div class="refs-header">
-            <span class="material-symbols-rounded refs-icon">collections</span>
-            <span class="refs-title">Reference Guides for Generation</span>
-            <span class="refs-subtitle">Style aesthetic is always applied; character identity attaches only when narrative requires.</span>
-          </div>
-
-          <div class="refs-grid">
-            <!-- Style Reference Card (Always present if workspace has style) -->
-            <div v-if="styleRef" class="ref-card style-ref-card">
-              <div class="ref-thumb-wrap">
-                <img v-if="styleRef.assetUrl" :src="styleRef.assetUrl" :alt="styleRef.style_name" class="ref-thumb" />
-                <div v-else class="ref-thumb-ph">
-                  <span class="material-symbols-rounded">palette</span>
+            <!-- 2. Extra Prompt Directives Card -->
+            <div v-if="tagId" class="extra-prompt-card clean-card">
+              <div class="extra-prompt-head">
+                <div class="extra-prompt-title-group">
+                  <span class="material-symbols-rounded extra-icon">add_task</span>
+                  <span class="extra-title">Extra Prompt Directives</span>
+                  <span class="extra-hint">Appended to final prompt for this scene</span>
                 </div>
+                <span v-if="extraPromptSavedMsg" class="extra-saved-indicator">
+                  <span class="material-symbols-rounded">check</span>
+                  {{ extraPromptSavedMsg }}
+                </span>
               </div>
-              <div class="ref-info">
-                <div class="ref-tag-row">
-                  <span class="badge-role style-role">Style Reference</span>
-                  <span class="badge-always">Always Active</span>
-                </div>
-                <h5 class="ref-name">{{ styleRef.style_name || styleRef.name }}</h5>
-                <p class="ref-desc">Guides artistic medium, sculpted textures, palette & lighting. Objects are not copied.</p>
-                <div class="ref-upload-row">
-                  <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
-                    <span class="material-symbols-rounded">cloud_upload</span>
-                    <span>{{ isUploadingRef ? 'Uploading...' : 'Change Style Ref' }}</span>
-                    <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="onUploadStyleRef" />
-                  </label>
+              <div class="extra-prompt-body">
+                <div class="extra-input-wrap">
+                  <input
+                    v-model="extraPrompt"
+                    type="text"
+                    class="clean-input extra-prompt-input"
+                    placeholder="Add custom modifiers: e.g. cinematic rim lighting, volumetric fog, ethereal 8k..."
+                    @input="onExtraPromptInput"
+                    @change="saveExtraPrompt"
+                  />
                   <button
-                    v-if="styleRef.assetUrl"
+                    v-if="extraPrompt"
                     type="button"
-                    class="clean-btn clean-btn-xs delete-ref-btn"
-                    :disabled="isUploadingRef"
-                    title="Delete this style reference image"
-                    @click="onDeleteStyleRef"
+                    class="clear-extra-btn"
+                    title="Clear extra prompt"
+                    @click="clearExtraPrompt"
                   >
-                    <span class="material-symbols-rounded">delete</span>
-                    <span>Delete</span>
+                    <span class="material-symbols-rounded">close</span>
                   </button>
                 </div>
               </div>
             </div>
 
-            <!-- Character Reference Card(s) -->
-            <template v-if="characterRefs && characterRefs.length">
-              <div v-for="c in characterRefs" :key="c.name" class="ref-card char-ref-card">
-                <div class="ref-thumb-wrap">
-                  <img v-if="c.assetUrl" :src="c.assetUrl" :alt="c.name" class="ref-thumb" />
-                  <div v-else class="ref-thumb-ph">
-                    <span class="material-symbols-rounded">face</span>
+            <!-- 3. Prompt Inspector with Tabs -->
+            <div ref="promptInspectorRef" class="prompt-inspector clean-card">
+              <div class="inspector-tabs-bar">
+                <div class="inspector-tabs">
+                  <button
+                    type="button"
+                    class="inspector-tab-btn"
+                    :class="{ active: activePromptTab === 'composed' }"
+                    @click="activePromptTab = 'composed'"
+                  >
+                    <span class="material-symbols-rounded tab-i">neurology</span>
+                    <span>Composed Prompt (Model Input)</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="inspector-tab-btn"
+                    :class="{ active: activePromptTab === 'narrative' }"
+                    @click="activePromptTab = 'narrative'"
+                  >
+                    <span class="material-symbols-rounded tab-i">auto_stories</span>
+                    <span>Scene Context Prompt</span>
+                  </button>
+                  <button
+                    v-if="cliCommand || dynamicCliCommand"
+                    type="button"
+                    class="inspector-tab-btn"
+                    :class="{ active: activePromptTab === 'cli' }"
+                    @click="activePromptTab = 'cli'"
+                  >
+                    <span class="material-symbols-rounded tab-i">terminal</span>
+                    <span>CLI Command</span>
+                  </button>
+                </div>
+
+                <!-- Copy button for active tab -->
+                <button
+                  type="button"
+                  class="clean-btn clean-btn-sm copy-active-btn"
+                  @click="copyActiveTabContent"
+                >
+                  <span class="material-symbols-rounded">
+                    {{ isCopied ? 'check' : 'content_copy' }}
+                  </span>
+                  {{ isCopied ? 'Copied' : 'Copy' }}
+                </button>
+              </div>
+
+              <!-- Tab Content 1: Composed Model Prompt -->
+              <div v-if="activePromptTab === 'composed'" class="prompt-panel">
+                <div class="panel-hint">
+                  <span class="material-symbols-rounded hint-icon">verified_user</span>
+                  <span>Strict prompt passed to Gemini. Isolates reference image roles to create an original scene.</span>
+                </div>
+                <div v-if="displayComposedPrompt" class="prompt-code-wrap">
+                  <pre class="code-box"><code>{{ displayComposedPrompt }}</code></pre>
+                </div>
+                <div v-else class="empty-prompt-state">
+                  <span class="material-symbols-rounded empty-prompt-icon">edit_note</span>
+                  <p class="empty-prompt-title">No prompt specified for this scene yet.</p>
+                  <p class="empty-prompt-desc">Auto-generate a rich visual prompt from the narrative using Gemini, or write one manually.</p>
+                  <button
+                    type="button"
+                    class="clean-btn clean-btn-sm auto-gen-primary-btn"
+                    :disabled="isRegeneratingPrompt"
+                    @click="onAutoGeneratePrompt"
+                  >
+                    <span class="material-symbols-rounded" :class="{ 'is-spinning': isRegeneratingPrompt }">
+                      {{ isRegeneratingPrompt ? 'sync' : 'auto_awesome' }}
+                    </span>
+                    <span>{{ isRegeneratingPrompt ? 'Generating Prompt...' : '✨ Auto-Generate Prompt with AI' }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Tab Content 2: Narrative Scene Prompt -->
+              <div v-else-if="activePromptTab === 'narrative'" class="prompt-panel">
+                <div class="panel-hint">
+                  <div class="hint-left">
+                    <span class="material-symbols-rounded hint-icon">info</span>
+                    <span>Scene description extracted from the Markdown narrative context.</span>
+                  </div>
+                  <div class="hint-actions">
+                    <button
+                      type="button"
+                      class="clean-btn clean-btn-xs auto-gen-btn"
+                      :disabled="isRegeneratingPrompt"
+                      title="Generate or re-synthesize prompt from narrative context"
+                      @click="onAutoGeneratePrompt"
+                    >
+                      <span class="material-symbols-rounded" :class="{ 'is-spinning': isRegeneratingPrompt }">
+                        {{ isRegeneratingPrompt ? 'sync' : 'auto_awesome' }}
+                      </span>
+                      <span>{{ isRegeneratingPrompt ? 'Generating...' : '✨ Auto-Generate' }}</span>
+                    </button>
+                    <button
+                      v-if="!isEditingPrompt"
+                      type="button"
+                      class="clean-btn clean-btn-xs edit-btn"
+                      title="Edit prompt text"
+                      @click="startEditPrompt"
+                    >
+                      <span class="material-symbols-rounded">edit</span>
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      v-else
+                      type="button"
+                      class="clean-btn clean-btn-xs save-btn"
+                      title="Save prompt changes to markdown"
+                      @click="saveEditedPrompt"
+                    >
+                      <span class="material-symbols-rounded">check</span>
+                      <span>Save</span>
+                    </button>
                   </div>
                 </div>
-                <div class="ref-info">
-                  <div class="ref-tag-row">
-                    <span class="badge-role char-role">Character Reference</span>
-                    <span class="badge-matched">Context Matched</span>
-                  </div>
-                  <h5 class="ref-name">{{ c.name }}</h5>
-                  <p class="ref-desc">Maintains facial features, costume & proportions in this new scene. Pose/background not copied.</p>
-                  <div class="ref-upload-row">
-                    <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
-                      <span class="material-symbols-rounded">cloud_upload</span>
-                      <span>{{ isUploadingRef ? 'Uploading...' : 'Change Photo' }}</span>
-                      <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="e => onUploadCharRef(e, c.name)" />
-                    </label>
+                <textarea
+                  v-if="isEditingPrompt"
+                  v-model="editingPromptText"
+                  class="clean-textarea edit-prompt-textarea"
+                  rows="6"
+                  placeholder="Enter scene prompt..."
+                ></textarea>
+                <p v-else-if="mediaPrompt" class="narrative-box">{{ mediaPrompt }}</p>
+                <div v-else class="empty-prompt-state">
+                  <span class="material-symbols-rounded empty-prompt-icon">edit_note</span>
+                  <p class="empty-prompt-title">No prompt specified for this scene yet.</p>
+                  <div class="empty-actions">
                     <button
-                      v-if="c.assetUrl"
                       type="button"
-                      class="clean-btn clean-btn-xs delete-ref-btn"
-                      :disabled="isUploadingRef"
-                      title="Delete this character reference photo"
-                      @click="onDeleteCharRef(c.name, c.assetUrl)"
+                      class="clean-btn clean-btn-sm auto-gen-primary-btn"
+                      :disabled="isRegeneratingPrompt"
+                      @click="onAutoGeneratePrompt"
                     >
-                      <span class="material-symbols-rounded">delete</span>
-                      <span>Delete</span>
+                      <span class="material-symbols-rounded" :class="{ 'is-spinning': isRegeneratingPrompt }">
+                        {{ isRegeneratingPrompt ? 'sync' : 'auto_awesome' }}
+                      </span>
+                      <span>{{ isRegeneratingPrompt ? 'Generating...' : '✨ Auto-Generate Prompt' }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="clean-btn clean-btn-sm"
+                      @click="startEditPrompt"
+                    >
+                      <span class="material-symbols-rounded">edit</span>
+                      <span>Write Manually</span>
                     </button>
                   </div>
                 </div>
               </div>
-            </template>
 
-            <!-- No Character Matched Notice -->
-            <div v-else class="ref-card empty-char-card">
-              <div class="ref-thumb-ph">
-                <span class="material-symbols-rounded empty-ref-icon">landscape</span>
-              </div>
-              <div class="ref-info">
-                <span class="badge-role generic-role">Environment / Establishing Scene</span>
-                <p class="ref-desc">No character references attached. Model focuses entirely on environmental storytelling.</p>
+              <!-- Tab Content 3: CLI Command -->
+              <div v-else-if="activePromptTab === 'cli'" class="prompt-panel">
+                <div class="panel-hint">
+                  <span class="material-symbols-rounded hint-icon">terminal</span>
+                  <span>Run this command in terminal to generate the image asset with storybook:</span>
+                </div>
+                <pre class="code-box cli-box"><code>{{ dynamicCliCommand }}</code></pre>
               </div>
             </div>
-          </div>
-        </div>
-
-        <!-- 5. Prompt Inspector with Tabs -->
-        <div class="prompt-inspector clean-card">
-          <div class="inspector-tabs-bar">
-            <div class="inspector-tabs">
-              <button
-                type="button"
-                class="inspector-tab-btn"
-                :class="{ active: activePromptTab === 'composed' }"
-                @click="activePromptTab = 'composed'"
-              >
-                <span class="material-symbols-rounded tab-i">neurology</span>
-                <span>Composed Model Prompt (Strict Template)</span>
-              </button>
-              <button
-                type="button"
-                class="inspector-tab-btn"
-                :class="{ active: activePromptTab === 'narrative' }"
-                @click="activePromptTab = 'narrative'"
-              >
-                <span class="material-symbols-rounded tab-i">auto_stories</span>
-                <span>Scene Context Prompt</span>
-              </button>
-              <button
-                v-if="cliCommand"
-                type="button"
-                class="inspector-tab-btn"
-                :class="{ active: activePromptTab === 'cli' }"
-                @click="activePromptTab = 'cli'"
-              >
-                <span class="material-symbols-rounded tab-i">terminal</span>
-                <span>CLI Command</span>
-              </button>
-            </div>
-
-            <!-- Copy button for active tab -->
-            <button
-              type="button"
-              class="clean-btn clean-btn-sm copy-active-btn"
-              @click="copyActiveTabContent"
-            >
-              <span class="material-symbols-rounded">
-                {{ isCopied ? 'check' : 'content_copy' }}
-              </span>
-              {{ isCopied ? 'Copied' : 'Copy' }}
-            </button>
-          </div>
-
-          <!-- Tab Content 1: Composed Model Prompt -->
-          <div v-if="activePromptTab === 'composed'" class="prompt-panel">
-            <div class="panel-hint">
-              <span class="material-symbols-rounded hint-icon">verified_user</span>
-              <span>This strict template is passed to Gemini 3.1 Flash Image. It isolates reference image roles to guarantee original scene generation without modifying/inpainting references.</span>
-            </div>
-            <pre class="code-box"><code>{{ composedPrompt || mediaPrompt }}</code></pre>
-          </div>
-
-          <!-- Tab Content 2: Narrative Scene Prompt -->
-          <div v-else-if="activePromptTab === 'narrative'" class="prompt-panel">
-            <div class="panel-hint">
-              <div class="hint-left">
-                <span class="material-symbols-rounded hint-icon">info</span>
-                <span>Original scene description extracted from the Markdown narrative context.</span>
-              </div>
-              <div class="hint-actions">
-                <button
-                  type="button"
-                  class="clean-btn clean-btn-xs auto-gen-btn"
-                  :disabled="isRegeneratingPrompt"
-                  title="Generate or re-synthesize prompt from narrative context"
-                  @click="onAutoGeneratePrompt"
-                >
-                  <span class="material-symbols-rounded" :class="{ 'is-spinning': isRegeneratingPrompt }">
-                    {{ isRegeneratingPrompt ? 'sync' : 'auto_awesome' }}
-                  </span>
-                  <span>{{ isRegeneratingPrompt ? 'Generating...' : '✨ Auto-Generate Prompt' }}</span>
-                </button>
-                <button
-                  v-if="!isEditingPrompt"
-                  type="button"
-                  class="clean-btn clean-btn-xs edit-btn"
-                  title="Edit prompt text"
-                  @click="startEditPrompt"
-                >
-                  <span class="material-symbols-rounded">edit</span>
-                  <span>Edit</span>
-                </button>
-                <button
-                  v-else
-                  type="button"
-                  class="clean-btn clean-btn-xs save-btn"
-                  title="Save prompt changes to markdown"
-                  @click="saveEditedPrompt"
-                >
-                  <span class="material-symbols-rounded">check</span>
-                  <span>Save</span>
-                </button>
-              </div>
-            </div>
-            <textarea
-              v-if="isEditingPrompt"
-              v-model="editingPromptText"
-              class="clean-textarea edit-prompt-textarea"
-              rows="4"
-              placeholder="Enter scene prompt..."
-            ></textarea>
-            <p v-else class="narrative-box">{{ mediaPrompt || 'No prompt specified.' }}</p>
-          </div>
-
-          <!-- Tab Content 3: CLI Command -->
-          <div v-else-if="activePromptTab === 'cli'" class="prompt-panel">
-            <div class="panel-hint">
-              <span class="material-symbols-rounded hint-icon">terminal</span>
-              <span>Run this command in terminal to generate the image asset with storybook:</span>
-            </div>
-            <pre class="code-box cli-box"><code>{{ dynamicCliCommand }}</code></pre>
           </div>
         </div>
       </div>
@@ -444,7 +531,8 @@ async function onAutoGeneratePrompt() {
     const res = await buildPrompt(currentStem, {
       tagId: tagId.value,
       type: mediaType.value,
-      section: section.value
+      section: section.value,
+      useAi: true
     });
     if (res && res.prompt) {
       mediaPrompt.value = res.prompt;
@@ -465,6 +553,86 @@ async function onAutoGeneratePrompt() {
 
 const selectedRatio = ref('inherit');
 const selectedSize = ref('inherit');
+const extraPrompt = ref('');
+const extraPromptSavedMsg = ref('');
+const promptInspectorRef = ref(null);
+const sheetBodyRef = ref(null);
+let extraPromptSaveTimeout = null;
+let extraPromptDebounce = null;
+
+function lockBodyScroll() {
+  try {
+    document.body.style.overflow = 'hidden';
+  } catch (e) {}
+}
+
+function unlockBodyScroll() {
+  try {
+    document.body.style.overflow = '';
+  } catch (e) {}
+}
+
+function scrollToPrompt() {
+  if (promptInspectorRef.value) {
+    promptInspectorRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } else if (sheetBodyRef.value) {
+    sheetBodyRef.value.scrollTo({ top: sheetBodyRef.value.scrollHeight, behavior: 'smooth' });
+  }
+}
+
+async function saveExtraPrompt() {
+  const currentStem = activeStem.value;
+  if (!currentStem || !tagId.value) return;
+
+  const wsSettings = workspaceSettingsCache[currentStem] || {
+    global: {
+      image: { ratio: '16:9', size: '1K', model: 'gemini-3.1-flash-image' },
+      video: { ratio: '16:9', model: 'veo-2.0-generate-001', duration: '5s' }
+    },
+    scenes: {}
+  };
+
+  if (!wsSettings.scenes) wsSettings.scenes = {};
+  if (!wsSettings.scenes[tagId.value]) {
+    wsSettings.scenes[tagId.value] = {};
+  }
+
+  const cleanVal = (extraPrompt.value || '').trim();
+  if (cleanVal) {
+    wsSettings.scenes[tagId.value].extra_prompt = cleanVal;
+  } else {
+    delete wsSettings.scenes[tagId.value].extra_prompt;
+  }
+
+  const keys = Object.keys(wsSettings.scenes[tagId.value]);
+  if (keys.length === 0 || keys.every(k => !wsSettings.scenes[tagId.value][k] || wsSettings.scenes[tagId.value][k] === 'inherit')) {
+    delete wsSettings.scenes[tagId.value];
+  }
+
+  try {
+    await saveWorkspaceSettings(currentStem, wsSettings);
+    extraPromptSavedMsg.value = 'Saved';
+    if (extraPromptSaveTimeout) clearTimeout(extraPromptSaveTimeout);
+    extraPromptSaveTimeout = setTimeout(() => {
+      extraPromptSavedMsg.value = '';
+    }, 2500);
+    emit('refresh');
+  } catch (e) {
+    console.error('Failed to save extra prompt:', e);
+  }
+}
+
+function onExtraPromptInput() {
+  if (extraPromptDebounce) clearTimeout(extraPromptDebounce);
+  extraPromptDebounce = setTimeout(() => {
+    saveExtraPrompt();
+  }, 500);
+}
+
+function clearExtraPrompt() {
+  extraPrompt.value = '';
+  saveExtraPrompt();
+}
 
 const activeStem = computed(() => props.stem || workspaceStem.value);
 
@@ -485,7 +653,8 @@ const currentGlobalSize = computed(() => {
 
 const isSceneOverridden = computed(() => {
   return (selectedRatio.value && selectedRatio.value !== 'inherit') ||
-         (selectedSize.value && selectedSize.value !== 'inherit');
+         (selectedSize.value && selectedSize.value !== 'inherit') ||
+         Boolean(extraPrompt.value && extraPrompt.value.trim());
 });
 
 async function onConfigChange() {
@@ -534,7 +703,9 @@ async function onConfigChange() {
 async function resetToGlobal() {
   selectedRatio.value = 'inherit';
   selectedSize.value = 'inherit';
+  extraPrompt.value = '';
   await onConfigChange();
+  await saveExtraPrompt();
 }
 
 const currentGenStatus = computed(() => {
@@ -550,6 +721,43 @@ const generationStatusMsg = computed(() => {
     return currentGenStatus.value.message;
   }
   return localStatusMsg.value;
+});
+
+const displayComposedPrompt = computed(() => {
+  let base = composedPrompt.value;
+  if (!base) {
+    if (mediaPrompt.value && mediaPrompt.value.trim()) {
+      const sections = [
+        '[TASK: BRAND-NEW SCENE ILLUSTRATION FROM SCRATCH]\nGenerate a completely new, original standalone illustration strictly depicting the SCENE DESCRIPTION below.\nCRITICAL CONSTRAINTS:\n- DO NOT edit, inpaint, crop, or modify the provided reference image(s).\n- DO NOT copy the compositions, backgrounds, camera perspectives, or poses from the reference image(s).\n- The environment, action, composition, and physical staging must originate 100% from the SCENE DESCRIPTION.'
+      ];
+      if (styleRef.value || (characterRefs.value && characterRefs.value.length)) {
+        const roles = ['[REFERENCE IMAGE ROLES]'];
+        let idx = 1;
+        if (styleRef.value) {
+          roles.push(`- Reference Image ${idx} (Artistic Style Reference: ${styleRef.value.style_name || 'Art Style'}):\n  * Adopt ONLY the artistic medium, sculpted/painterly textures, color palette, lighting atmosphere, and visual aesthetic shown in Image ${idx}.\n  * Do NOT copy the specific objects, buildings, or layout of Image ${idx}.`);
+          idx++;
+        }
+        for (const c of characterRefs.value) {
+          roles.push(`- Reference Image ${idx} (Character Identity Reference: ${c.name}):\n  * Maintain the exact character visual identity, facial features, hairstyle, clothing design, colors, and proportions of ${c.name} from Image ${idx}.\n  * Place ${c.name} naturally into this new scene, dynamically adopting the action, pose, and emotion specified in the SCENE DESCRIPTION.\n  * Do NOT replicate the pose, camera framing, or background of Image ${idx}.`);
+          idx++;
+        }
+        sections.push(roles.join('\n'));
+      }
+      sections.push(`[SCENE DESCRIPTION & ACTION]\n${mediaPrompt.value.trim()}`);
+      base = sections.join('\n\n');
+    } else {
+      base = '';
+    }
+  }
+  if (extraPrompt.value && extraPrompt.value.trim()) {
+    const trimmed = extraPrompt.value.trim();
+    if (base && !base.includes('[ADDITIONAL SCENE DIRECTIVES')) {
+      base = `${base}\n\n[ADDITIONAL SCENE DIRECTIVES & CUSTOM PROMPT]\n${trimmed}`;
+    } else if (!base) {
+      base = `[ADDITIONAL SCENE DIRECTIVES & CUSTOM PROMPT]\n${trimmed}`;
+    }
+  }
+  return base;
 });
 
 const dynamicCliCommand = computed(() => {
@@ -568,6 +776,9 @@ const dynamicCliCommand = computed(() => {
   }
   if (effSize && mediaType.value === 'image') {
     base += ` --size ${effSize}`;
+  }
+  if (extraPrompt.value && extraPrompt.value.trim()) {
+    base += ` --extra-prompt "${extraPrompt.value.trim()}"`;
   }
   return base;
 });
@@ -602,7 +813,7 @@ function open({
   characterRefs.value = cRefs || [];
   cliCommand.value = cmd;
   mediaDetails.value = details;
-  activePromptTab.value = comp ? 'composed' : 'narrative';
+  activePromptTab.value = (comp || prompt) ? 'composed' : 'narrative';
   copiedKey.value = '';
   localStatusMsg.value = '';
   isUploadingRef.value = false;
@@ -612,10 +823,13 @@ function open({
   const tagOverride = wsSettings?.scenes?.[tagId.value] || {};
   selectedRatio.value = tagOverride.ratio || 'inherit';
   selectedSize.value = tagOverride.size || 'inherit';
+  extraPrompt.value = tagOverride.extra_prompt || '';
+  extraPromptSavedMsg.value = '';
 
   if (dialogRef.value && !dialogRef.value.open) {
     dialogRef.value.showModal();
     isOpen.value = true;
+    lockBodyScroll();
   }
 
   if (autoGenerate && tagId.value && !isGenerating.value) {
@@ -679,7 +893,8 @@ async function triggerGeneration() {
       section: section.value,
       type: mediaType.value,
       ratio: selectedRatio.value,
-      size: selectedSize.value
+      size: selectedSize.value,
+      extraPrompt: extraPrompt.value
     });
     if (res && res.success) {
       if (mediaType.value === 'image') {
@@ -765,10 +980,12 @@ function close() {
     dialogRef.value.close();
   }
   isOpen.value = false;
+  unlockBodyScroll();
 }
 
 function onDialogClose() {
   isOpen.value = false;
+  unlockBodyScroll();
 }
 
 async function copyText(text, key) {
@@ -788,7 +1005,7 @@ async function copyText(text, key) {
 
 function copyActiveTabContent() {
   if (activePromptTab.value === 'composed') {
-    copyText(composedPrompt.value || mediaPrompt.value, 'composed');
+    copyText(displayComposedPrompt.value || mediaPrompt.value, 'composed');
   } else if (activePromptTab.value === 'narrative') {
     copyText(mediaPrompt.value, 'narrative');
   } else if (activePromptTab.value === 'cli') {
@@ -833,6 +1050,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  unlockBodyScroll();
   const dialog = dialogRef.value;
   if (dialog && !('closedBy' in HTMLDialogElement.prototype)) {
     dialog.removeEventListener('click', handleBackdropClick);
@@ -854,24 +1072,24 @@ defineExpose({
   background: transparent;
   padding: 0;
   margin: auto;
-  max-width: 94vw;
-  max-height: 92vh;
+  max-width: 96vw;
+  max-height: 94vh;
   box-shadow: none;
   overflow: hidden;
 }
 
 .lightbox-dialog::backdrop {
-  background-color: rgba(9, 9, 11, 0.72);
+  background-color: rgba(9, 9, 11, 0.75);
   backdrop-filter: blur(8px);
 }
 
 .lightbox-sheet {
   display: flex;
   flex-direction: column;
-  max-width: 1040px;
-  width: 92vw;
-  height: 90vh;
-  max-height: 90vh;
+  max-width: 1240px;
+  width: 94vw;
+  height: 92vh;
+  max-height: 92vh;
   overflow: hidden;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -886,6 +1104,24 @@ defineExpose({
   border-bottom: 1px solid var(--border-default);
   background: var(--bg-surface);
   flex-shrink: 0;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.jump-prompt-head-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: var(--radius-full);
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary-text);
+  border: 1px solid var(--accent-primary);
 }
 
 .sheet-title-group {
@@ -906,14 +1142,58 @@ defineExpose({
 }
 
 .sheet-body {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-height: 0;
   padding: 1.25rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.lightbox-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+@media (min-width: 860px) {
+  .lightbox-grid {
+    grid-template-columns: 440px 1fr;
+    align-items: start;
+  }
+}
+
+.lightbox-col-visuals {
   display: flex;
   flex-direction: column;
-  gap: 1.1rem;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.lightbox-col-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.sheet-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sheet-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sheet-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+
+.sheet-body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 .media-viewport {
@@ -923,15 +1203,129 @@ defineExpose({
   background: #000;
   border-radius: var(--radius-md);
   overflow: hidden;
-  max-height: 42vh;
+  max-height: 48vh;
   flex-shrink: 0;
 }
 
 .media-elem {
   max-width: 100%;
-  max-height: 42vh;
+  max-height: 48vh;
   object-fit: contain;
   display: block;
+}
+
+.jump-prompt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.jump-prompt-btn:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-strong);
+}
+
+/* Extra Prompt Card */
+.extra-prompt-card {
+  padding: 0.85rem 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.extra-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.extra-prompt-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  flex-wrap: wrap;
+}
+
+.extra-icon {
+  font-size: 18px;
+  color: var(--accent-primary);
+}
+
+.extra-title {
+  font-weight: 600;
+}
+
+.extra-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.extra-saved-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.extra-saved-indicator .material-symbols-rounded {
+  font-size: 14px;
+}
+
+.extra-prompt-body {
+  width: 100%;
+}
+
+.extra-input-wrap {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.extra-prompt-input {
+  width: 100%;
+  padding-right: 2rem;
+  font-size: 0.82rem;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.extra-prompt-input:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-surface);
+}
+
+.clear-extra-btn {
+  position: absolute;
+  right: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+
+.clear-extra-btn:hover {
+  color: var(--text-primary);
+}
+
+.clear-extra-btn .material-symbols-rounded {
+  font-size: 16px;
 }
 
 /* Pending Hero Banner */
@@ -1243,8 +1637,8 @@ defineExpose({
 
 .refs-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 0.85rem;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
 }
 
 .ref-card {
@@ -1565,5 +1959,67 @@ defineExpose({
   background: var(--bg-surface);
   color: var(--text-primary);
   resize: vertical;
+}
+
+.empty-prompt-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.75rem 1.25rem;
+  text-align: center;
+  background: var(--bg-surface-secondary);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-sm);
+  gap: 0.4rem;
+}
+
+.empty-prompt-icon {
+  font-size: 32px;
+  color: var(--text-muted);
+}
+
+.empty-prompt-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.empty-prompt-desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  max-width: 360px;
+  margin: 0 0 0.4rem 0;
+  line-height: 1.4;
+}
+
+.auto-gen-primary-btn {
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: all 0.15s ease;
+}
+
+.auto-gen-primary-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 0.25rem;
 }
 </style>

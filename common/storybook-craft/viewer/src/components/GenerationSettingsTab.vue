@@ -51,6 +51,71 @@
       </div>
     </header>
 
+    <!-- 0. Google Gemini API Configuration Banner -->
+    <div class="api-key-banner clean-card">
+      <div class="api-key-left">
+        <div class="api-key-icon-box">
+          <span class="material-symbols-rounded">key</span>
+        </div>
+        <div class="api-key-info">
+          <div class="api-key-title-row">
+            <h3 class="api-key-title">Google GenAI / Gemini API Key</h3>
+            <span v-if="apiKeyStatus.has_key" class="key-status-badge is-active">
+              <span class="status-dot dot-active"></span>
+              Active: {{ apiKeyStatus.masked_key || 'Configured' }}
+            </span>
+            <span v-else class="key-status-badge is-missing">
+              <span class="status-dot dot-missing"></span>
+              Not Configured
+            </span>
+          </div>
+          <p class="api-key-sub">
+            Configure GEMINI_API_KEY to enable Gemini 3.1 Flash Image, Veo 2.0 Video, and AI prompt refinement.
+          </p>
+        </div>
+      </div>
+
+      <div class="api-key-right">
+        <div class="key-input-row">
+          <input
+            v-model="geminiApiKeyInput"
+            :type="showApiKey ? 'text' : 'password'"
+            class="clean-input api-key-input"
+            placeholder="Enter GEMINI_API_KEY (AIza...)"
+            @keyup.enter="saveApiKey"
+          />
+          <button
+            type="button"
+            class="clean-icon-btn toggle-key-btn"
+            :title="showApiKey ? 'Hide Key' : 'Show Key'"
+            @click="showApiKey = !showApiKey"
+          >
+            <span class="material-symbols-rounded">{{ showApiKey ? 'visibility_off' : 'visibility' }}</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          class="clean-btn clean-btn-primary clean-btn-sm save-key-btn"
+          :disabled="isSavingKey"
+          @click="saveApiKey"
+        >
+          <span class="material-symbols-rounded" :class="{ 'is-spinning': isSavingKey }">
+            {{ isSavingKey ? 'sync' : 'save' }}
+          </span>
+          <span>{{ isSavingKey ? 'Saving...' : 'Save API Key' }}</span>
+        </button>
+        <button
+          v-if="apiKeyStatus.has_key"
+          type="button"
+          class="clean-btn clean-btn-sm clear-key-btn"
+          title="Clear saved API key"
+          @click="clearApiKey"
+        >
+          <span>Clear</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Global Controls Grid (Image & Video) -->
     <div class="global-cards-grid">
       <!-- 1. Global Image Defaults -->
@@ -330,6 +395,7 @@
               <th class="col-status">Inheritance Status</th>
               <th class="col-ratio">Aspect Ratio</th>
               <th class="col-size">Resolution Size</th>
+              <th class="col-extra">Extra Prompt Directives</th>
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
@@ -416,6 +482,20 @@
                 <span v-else class="text-muted-dash">—</span>
               </td>
 
+              <!-- 5.5 Extra Prompt Directives -->
+              <td class="col-extra">
+                <div class="inline-extra-wrap">
+                  <input
+                    :value="item.extraPrompt || ''"
+                    type="text"
+                    class="clean-input inline-extra-input"
+                    :class="{ 'is-custom': !!item.extraPrompt }"
+                    placeholder="Add modifiers (e.g. rim lighting)..."
+                    @change="onSceneExtraPromptChange(item.id, $event.target.value)"
+                  />
+                </div>
+              </td>
+
               <!-- 6. Actions -->
               <td class="col-actions">
                 <div class="actions-group">
@@ -450,8 +530,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch } from 'vue';
-import { saveWorkspaceSettings, resolveTagSettings } from '../services/api';
+import { ref, reactive, computed, watch, onMounted } from 'vue';
+import {
+  saveWorkspaceSettings,
+  resolveTagSettings,
+  fetchServerApiKeyStatus,
+  saveServerApiKey,
+  getStoredApiKey
+} from '../services/api';
 
 const props = defineProps({
   stem: { type: String, required: true },
@@ -469,6 +555,46 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['update-settings', 'preview']);
+
+// Gemini API Key state
+const apiKeyStatus = ref({ has_key: false, masked_key: '' });
+const geminiApiKeyInput = ref('');
+const showApiKey = ref(false);
+const isSavingKey = ref(false);
+
+async function checkApiKeyStatus() {
+  const status = await fetchServerApiKeyStatus();
+  apiKeyStatus.value = status;
+  if (!geminiApiKeyInput.value && getStoredApiKey()) {
+    geminiApiKeyInput.value = getStoredApiKey();
+  }
+}
+
+async function saveApiKey() {
+  const key = (geminiApiKeyInput.value || '').trim();
+  isSavingKey.value = true;
+  try {
+    const res = await saveServerApiKey(key);
+    apiKeyStatus.value = {
+      has_key: res.has_key,
+      masked_key: res.masked_key
+    };
+    flashToast(key ? 'Gemini API Key saved successfully!' : 'Gemini API Key cleared.', 'saved');
+  } catch (err) {
+    flashToast(`API Key error: ${err.message}`, 'error', 5000);
+  } finally {
+    isSavingKey.value = false;
+  }
+}
+
+async function clearApiKey() {
+  geminiApiKeyInput.value = '';
+  await saveApiKey();
+}
+
+onMounted(() => {
+  checkApiKeyStatus();
+});
 
 // Reactive clone of settings
 const localSettings = reactive({
@@ -654,6 +780,21 @@ function onSceneSizeChange(tagId, val) {
   triggerAutoSave();
 }
 
+function onSceneExtraPromptChange(tagId, val) {
+  if (!tagId) return;
+  if (!localSettings.scenes[tagId]) {
+    localSettings.scenes[tagId] = {};
+  }
+  const clean = (val || '').trim();
+  if (clean) {
+    localSettings.scenes[tagId].extra_prompt = clean;
+  } else {
+    delete localSettings.scenes[tagId].extra_prompt;
+    cleanEmptyScene(tagId);
+  }
+  triggerAutoSave();
+}
+
 function cleanEmptyScene(tagId) {
   const sc = localSettings.scenes[tagId];
   if (!sc) return;
@@ -687,6 +828,7 @@ const processedTags = computed(() => {
       isOverridden: resolved.isOverridden,
       overrideRatio: resolved.overrideRatio,
       overrideSize: resolved.overrideSize,
+      extraPrompt: resolved.extraPrompt || '',
       effectiveRatio: resolved.ratio,
       effectiveSize: resolved.size,
       globalRatio: resolved.globalRatio,
@@ -1473,5 +1615,163 @@ function inspectScene(tag) {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* API Key Banner */
+.api-key-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.api-key-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 300px;
+}
+
+.api-key-icon-box {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: rgba(234, 179, 8, 0.12);
+  color: #ca8a04;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.api-key-icon-box .material-symbols-rounded {
+  font-size: 22px;
+}
+
+.api-key-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.api-key-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.api-key-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.key-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.key-status-badge.is-active {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.key-status-badge.is-missing {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.dot-active {
+  background: #10b981;
+}
+
+.dot-missing {
+  background: #f59e0b;
+}
+
+.api-key-sub {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.api-key-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.key-input-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 280px;
+}
+
+.api-key-input {
+  width: 100%;
+  padding-right: 2.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.toggle-key-btn {
+  position: absolute;
+  right: 0.4rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.toggle-key-btn:hover {
+  color: var(--text-primary);
+}
+
+.clear-key-btn {
+  color: var(--text-muted);
+}
+
+.clear-key-btn:hover {
+  color: #b91c1c;
+}
+
+/* Col Extra Directives */
+.col-extra {
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.inline-extra-wrap {
+  width: 100%;
+}
+
+.inline-extra-input {
+  width: 100%;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.inline-extra-input.is-custom {
+  border-color: #8b5cf6;
+  background-color: rgba(139, 92, 246, 0.04);
 }
 </style>

@@ -31,9 +31,14 @@
 
         <div class="header-right">
           <!-- Active Generation Indicator Pill -->
-          <div v-if="activeGenerations.length" class="gen-progress-pill">
+          <div
+            v-if="activeGenerations.length || runningTasksCount > 0"
+            class="gen-progress-pill cursor-pointer"
+            title="Click to view generation progress and logs"
+            @click="currentTab = 'tasks'"
+          >
             <span class="material-symbols-rounded is-spinning">sync</span>
-            <span>Generating {{ activeGenerations.map(g => g.tagId).join(', ') }}...</span>
+            <span>Generating {{ activeTagNames }}...</span>
           </div>
 
           <!-- Add Scene Tag Button in App Header -->
@@ -152,6 +157,22 @@
           <button
             type="button"
             class="tab-btn"
+            :class="{ active: currentTab === 'tasks' }"
+            @click="currentTab = 'tasks'"
+          >
+            <span class="material-symbols-rounded tab-icon">history_edu</span>
+            <span>Generations</span>
+            <span v-if="runningTasksCount" class="tab-badge running-badge">
+              {{ runningTasksCount }}
+            </span>
+            <span v-else-if="failedTasksCount" class="tab-badge failed-badge" title="Failed tasks">
+              {{ failedTasksCount }}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="tab-btn"
             :class="{ active: currentTab === 'settings' }"
             @click="currentTab = 'settings'"
           >
@@ -240,7 +261,16 @@
             @refresh="() => loadCurrentWorkspace(true)"
           />
 
-          <!-- 6. Generation Settings -->
+          <!-- 6. Generations Activity & History -->
+          <GenerationTasksTab
+            v-else-if="currentTab === 'tasks'"
+            :stem="selectedStem"
+            @preview="openPreview"
+            @switch-tab="(tab) => currentTab = tab"
+            @refresh="() => loadCurrentWorkspace(true)"
+          />
+
+          <!-- 7. Generation Settings -->
           <GenerationSettingsTab
             v-else-if="currentTab === 'settings'"
             :stem="selectedStem"
@@ -347,6 +377,20 @@
             />
             <span class="form-hint">Model identifier used by Google GenAI SDK.</span>
           </div>
+
+          <div class="form-group">
+            <label class="form-label">
+              <span class="material-symbols-rounded">key</span>
+              Google Gemini API Key
+            </label>
+            <input
+              v-model="apiKeyInput"
+              type="password"
+              class="clean-input"
+              placeholder="Enter GEMINI_API_KEY (AIza...)"
+            />
+            <span class="form-hint">Used for Gemini 3.1 Flash Image, Veo 2.0 Video, and AI prompt refinement.</span>
+          </div>
         </div>
 
         <footer class="settings-footer">
@@ -362,15 +406,20 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import {
   getWorkspaces,
   getWorkspace,
   onGenerationComplete,
   generationState,
+  tasksState,
+  fetchWorkspaceTasks,
   workspaceSettingsCache,
   getGenerationSettings,
   saveGenerationSettings,
+  fetchServerApiKeyStatus,
+  saveServerApiKey,
+  getStoredApiKey,
   runTagGeneration
 } from './services/api';
 import StoryReader from './components/StoryReader.vue';
@@ -380,6 +429,7 @@ import StyleProfile from './components/StyleProfile.vue';
 import MediaGallery from './components/MediaGallery.vue';
 import ImageLightbox from './components/ImageLightbox.vue';
 import GenerationSettingsTab from './components/GenerationSettingsTab.vue';
+import GenerationTasksTab from './components/GenerationTasksTab.vue';
 import AddSceneTagModal from './components/AddSceneTagModal.vue';
 
 const workspaces = ref([]);
@@ -396,6 +446,7 @@ const isDark = ref(false);
 const lightboxRef = ref(null);
 const settingsDialogRef = ref(null);
 const addTagModalRef = ref(null);
+const apiKeyInput = ref(getStoredApiKey());
 
 const genSettings = reactive(getGenerationSettings());
 
@@ -441,11 +492,13 @@ function onSettingsUpdated(newSettings) {
   workspaceSettingsCache[selectedStem.value] = newSettings;
 }
 
-function openSettings() {
+async function openSettings() {
   const current = getGenerationSettings();
   genSettings.ratio = current.ratio || '16:9';
   genSettings.size = current.size || '1K';
   genSettings.model = current.model || 'gemini-3.1-flash-image';
+  const status = await fetchServerApiKeyStatus();
+  apiKeyInput.value = getStoredApiKey() || (status.has_key ? status.masked_key : '');
   if (settingsDialogRef.value) {
     settingsDialogRef.value.showModal();
   }
@@ -457,12 +510,15 @@ function closeSettings() {
   }
 }
 
-function saveAndCloseSettings() {
+async function saveAndCloseSettings() {
   saveGenerationSettings({
     ratio: genSettings.ratio,
     size: genSettings.size,
     model: genSettings.model
   });
+  if (apiKeyInput.value && !apiKeyInput.value.includes('...')) {
+    await saveServerApiKey(apiKeyInput.value.trim());
+  }
   closeSettings();
 }
 
@@ -474,6 +530,25 @@ function onSettingsBackdropClick(event) {
 
 const activeGenerations = computed(() => {
   return Object.values(generationState.activeMap).filter(item => item.stem === selectedStem.value && item.status === 'generating');
+});
+
+const runningTasksCount = computed(() => {
+  return tasksState.runningCount || activeGenerations.value.length;
+});
+
+const failedTasksCount = computed(() => {
+  return tasksState.failedCount || 0;
+});
+
+const activeTagNames = computed(() => {
+  if (activeGenerations.value.length > 0) {
+    return activeGenerations.value.map(g => g.tagId).join(', ');
+  }
+  const running = (tasksState.tasks || []).filter(t => t.status === 'running');
+  if (running.length > 0) {
+    return running.map(t => t.tag_id || t.type).join(', ');
+  }
+  return 'assets';
 });
 
 const totalMediaCount = computed(() => {
@@ -506,8 +581,13 @@ async function onWorkspaceChange() {
   await loadCurrentWorkspace(false);
 }
 
+let isLoadingWorkspace = false;
+let loadDebounceTimer = null;
+
 async function loadCurrentWorkspace(silent = false) {
-  if (!selectedStem.value) return;
+  if (!selectedStem.value || isLoadingWorkspace) return;
+  isLoadingWorkspace = true;
+
   if (!silent && !workspaceData.value) {
     loading.value = true;
   }
@@ -523,6 +603,7 @@ async function loadCurrentWorkspace(silent = false) {
   } finally {
     loading.value = false;
     isRefreshing.value = false;
+    isLoadingWorkspace = false;
   }
 }
 
@@ -554,12 +635,26 @@ function toggleTheme() {
   localStorage.setItem('storybook_theme', theme);
 }
 
+watch(() => tasksState.runningCount, (newVal, oldVal) => {
+  if (oldVal > 0 && newVal === 0) {
+    if (loadDebounceTimer) clearTimeout(loadDebounceTimer);
+    loadDebounceTimer = setTimeout(() => {
+      loadDebounceTimer = null;
+      loadCurrentWorkspace(true);
+    }, 300);
+  }
+});
+
 onMounted(() => {
   initTheme();
   initWorkspaces();
   onGenerationComplete((err, payload) => {
-    if (!err && payload?.stem === selectedStem.value) {
-      loadCurrentWorkspace(true);
+    if (!err && (payload?.allFinished || payload?.stem === selectedStem.value)) {
+      if (loadDebounceTimer) clearTimeout(loadDebounceTimer);
+      loadDebounceTimer = setTimeout(() => {
+        loadDebounceTimer = null;
+        loadCurrentWorkspace(true);
+      }, 300);
     }
   });
 });
@@ -768,6 +863,22 @@ onMounted(() => {
   background: rgba(139, 92, 246, 0.14);
   color: #7c3aed;
   border-color: rgba(139, 92, 246, 0.3);
+}
+
+.tab-badge.running-badge {
+  background: #fbc02d;
+  color: #5d4037;
+  border-color: #f57f17;
+}
+
+.tab-badge.failed-badge {
+  background: #ef5350;
+  color: #ffffff;
+  border-color: #d32f2f;
+}
+
+.cursor-pointer {
+  cursor: pointer;
 }
 
 .tab-btn.active .tab-badge.override-badge {

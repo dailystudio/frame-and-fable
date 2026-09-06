@@ -336,12 +336,15 @@ async function handleAutoBuildPrompt() {
       section: section.value,
       beforeText: ctxBefore,
       afterText: ctxAfter,
-      tagId: tagId.value
+      tagId: tagId.value,
+      useAi: true
     });
 
     if (res.prompt) {
       prompt.value = res.prompt;
-      statusMessage.value = '✨ Successfully synthesized prompt from narrative context & art style!';
+      statusMessage.value = res.ai_refined
+        ? '🎨 AI Art Director refined prompt with cinematic visual details!'
+        : '✨ Synthesized prompt from narrative context & art style (AI unavailable — set GEMINI_API_KEY for richer prompts)';
     }
   } catch (err) {
     statusMessage.value = `Failed to generate prompt: ${err.message}`;

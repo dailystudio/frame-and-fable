@@ -215,6 +215,20 @@ const renderedHtml = computed(() => {
         matched = props.images.find(img => img.id === tagId || img.name.startsWith(tagId + '.') || img.name.includes(tagId));
       }
 
+      // Robust fallback: check if tagData or enriched metadata indicates the asset was generated
+      if (!matched) {
+        const rawAsset = tagData.asset || enriched?.asset;
+        const isStatusGen = tagData.status === 'generated' || enriched?.status === 'generated' || enriched?.isGenerated;
+        if (rawAsset && (isStatusGen || rawAsset.startsWith('images/') || rawAsset.startsWith('videos/'))) {
+          const assetFile = rawAsset.split('/').pop();
+          matched = {
+            id: tagId,
+            name: assetFile,
+            assetUrl: rawAsset.startsWith('/api/') ? rawAsset : `/api/asset/${encodeURIComponent(props.stem)}/${rawAsset}`
+          };
+        }
+      }
+
       const isGenerated = !!matched;
       const isGeneratingTag = isTagGenerating(props.stem, tagId);
 
@@ -338,11 +352,9 @@ function handleContentClick(event) {
   const insertBtn = event.target.closest('[data-action="insert-tag-here"]');
   if (insertBtn) {
     const zone = insertBtn.closest('.para-insert-zone');
-    const prevP = zone?.previousElementSibling;
-    const nextP = zone?.nextElementSibling;
-    const beforeText = prevP?.innerText?.trim() || '';
-    const afterText = nextP?.innerText?.trim() || '';
-
+    
+    // Walk backwards to find preceding narrative paragraph in this section
+    let beforeText = '';
     let section = '';
     let el = zone?.previousElementSibling;
     while (el) {
@@ -350,7 +362,26 @@ function handleContentClick(event) {
         section = el.innerText.trim();
         break;
       }
+      if (el.tagName === 'P' && !beforeText) {
+        beforeText = el.innerText.trim();
+      }
       el = el.previousElementSibling;
+    }
+
+    // Walk forward to find following narrative paragraph in this section
+    let afterText = '';
+    let nextEl = zone?.nextElementSibling;
+    while (nextEl) {
+      if (/^H[1-6]$/i.test(nextEl.tagName)) {
+        // Next element is the next section heading: this is the last paragraph of the section!
+        afterText = '';
+        break;
+      }
+      if (nextEl.tagName === 'P') {
+        afterText = nextEl.innerText.trim();
+        break;
+      }
+      nextEl = nextEl.nextElementSibling;
     }
 
     emit('open-add-tag', {
@@ -416,14 +447,40 @@ function handleContentClick(event) {
   // 2. Clicked on a standalone markdown image
   const imgTarget = event.target.closest('img');
   if (imgTarget) {
-    const src = imgTarget.getAttribute('src');
+    const src = imgTarget.getAttribute('src') || '';
     const alt = imgTarget.getAttribute('alt') || 'Scene Illustration';
+    const tagId = imgTarget.dataset.tagId || '';
+
+    // Match against tags by data-tag-id, filename, or alt text
+    const filename = src.split('/').pop().split('?')[0];
+    const baseName = filename.replace(/\.[^/.]+$/, "");
+    const enriched = (props.tags || []).find(t =>
+      (tagId && t.id === tagId) ||
+      t.id === baseName ||
+      filename.includes(t.id) ||
+      t.id === alt
+    );
+
+    const resolvedTagId = enriched?.id || tagId || baseName;
+    const resolvedPrompt = enriched?.prompt || (imgTarget.dataset.prompt ? decodeURIComponent(imgTarget.dataset.prompt) : alt);
+
     emit('preview', {
       src,
-      title: alt,
-      type: 'image',
-      prompt: '',
+      title: enriched ? `[${(enriched.type || 'image').toUpperCase()}] ${enriched.id}${enriched.section ? ' - ' + enriched.section : ''}` : alt,
+      type: enriched?.type || 'image',
+      id: resolvedTagId,
+      tagId: resolvedTagId,
+      stem: props.stem,
+      section: enriched?.section || '',
+      prompt: resolvedPrompt,
+      composedPrompt: enriched?.composed_prompt || '',
+      styleRef: enriched?.style_ref || null,
+      characterRefs: enriched?.character_refs || [],
+      cliCommand: enriched?.cli_command || '',
       details: {
+        TagID: resolvedTagId,
+        Type: (enriched?.type || 'image') === 'video' ? 'Video Scene' : 'Image Scene',
+        Section: enriched?.section || 'N/A',
         Workspace: props.stem,
         Context: 'Story Reader'
       }

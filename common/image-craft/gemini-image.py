@@ -557,8 +557,8 @@ def main():
         target_mime_type = "image/png"
         default_ext = ".png"
 
-    # Prepare Client
-    client = genai.Client(api_key=api_key)
+    # Prepare Client with timeout (google.genai timeout is in milliseconds: 300,000 ms = 5 mins)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 300000})
 
     if args.verbose:
         print(f"[gemini-image] Using Model: {model_name}")
