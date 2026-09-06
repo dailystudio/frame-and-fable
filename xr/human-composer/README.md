@@ -4,8 +4,9 @@ A CLI tool powered by Blender to compose, align, and bind accessories (such as h
 
 ## Key Features
 
+- **Isolated Part Binding Architecture**: Binds each accessory or garment (`--hair`, `--upper`) in isolation against the pristine, clean body and armature before merging them into the final composition, eliminating order dependency and cross-item geometry interference.
 - **Multi-View Reference Alignment**: Leverages 2D multi-angle character reference images (`--ref-front`, `--ref-left`, `--ref-right`, `--ref-back`) to dynamically calculate 3D scale, position, depth, and crown volume offsets so hair fits the skull naturally.
-- **Full Armature Binding & Rigging**: Binds and parents the hair mesh to the body's skeleton (`Armature`) and paints vertex group weights to `mixamorig_Head`, allowing hair to deform synchronously with head movement and skeletal animations.
+- **Garment Armhole Anchoring & Weight Transfer**: Aligns upper garments (suits, shirts, jackets) to body shoulder joints and transfers vertex group weights from the clean body mesh, giving seamless skeletal deformation across all limbs.
 - **Texture Conflict Resolution**: Automatically avoids overwrites when both body and hair USDZ models contain identically named textures (such as `textures/shaded.png`) by isolating, renaming, and relinking shader nodes before USDZ export.
 - **Automated Output Suite**: Generates a dedicated subdirectory per model under `outputs/` containing:
   - **Bound USDZ Model**: Ready for AR / XR / 3D scenes.
@@ -14,7 +15,7 @@ A CLI tool powered by Blender to compose, align, and bind accessories (such as h
     1. **360° Turntable**: Full character presentation rotation around the vertical axis.
     2. **180° Head Turn**: Head smoothly rotates left and right with cinematic camera zoom to demonstrate bone binding.
     3. **Skeletal Animation**: Plays the first skeletal animation clip (if present in the model or provided via `--anim`).
-  - **Intermediate Comparisons (`intermediates/`)**: Multi-angle renders and side-by-side comparison images against reference photos (via `--intermediate`).
+  - **Intermediate Previews & Comparisons (`intermediates/`)**: Generates isolated bind previews for each part (`part_hair.png`, `part_upper.png`), final composite views (`part_final.png`, `render_front.png`, etc.), and side-by-side comparison images against reference photos (via `--intermediate`).
 - **Headless Blender Automation**: Executes seamlessly via Blender's background scripting mode without requiring a GUI.
 
 ---
@@ -138,10 +139,14 @@ outputs/
 └── man/
     ├── man_bound.usdz            # Bound 3D model with rigged skeleton and distinct textures
     ├── preview.png               # High-res static render
-    ├── preview_animation.mp4     # 360-degree turntable video loop
+    ├── preview_animation.mp4     # 360-degree turntable & skeletal animation loop
     └── intermediates/            # Generated when --intermediate is passed
-        ├── render_front.png
+        ├── part_hair.png         # Isolated preview of hair on clean body
+        ├── part_upper.png        # Isolated preview of upper garment on clean body
+        ├── part_final.png        # Full composite preview of all merged parts
+        ├── render_front.png      # Multi-angle views of final composition
         ├── render_left.png
+        ├── render_right.png
         ├── render_back.png
         ├── comparison_front.png  # Side-by-side: reference photo vs. 3D render
         ├── comparison_left.png
@@ -153,11 +158,12 @@ outputs/
 ## CLI Options
 
 ```
-usage: human-composer.py bind [-h] --body BODY --hair HAIR
+usage: human-composer.py bind [-h] --body BODY [--hair HAIR] [--upper UPPER]
                               [--ref-front REF_FRONT] [--ref-left REF_LEFT]
                               [--ref-right REF_RIGHT] [--ref-back REF_BACK]
                               [--output-dir OUTPUT_DIR] [--output OUTPUT]
-                              [--name NAME] [--intermediate] [--blender BLENDER]
+                              [--name NAME] [--preview] [--preview-anim]
+                              [--intermediate] [--anim ANIM] [--blender BLENDER]
 ```
 
 ### `bind` Command Options
@@ -165,7 +171,8 @@ usage: human-composer.py bind [-h] --body BODY --hair HAIR
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--body` | Path | *Required* | Path to input human body USDZ model (mesh + armature). |
-| `--hair` | Path | *Required* | Path to input hair accessory USDZ model. |
+| `--hair` | Path | `None` | Path to input hair accessory USDZ model. |
+| `--upper` | Path | `None` | Path to input upper garment USDZ model (e.g. suit, jacket, shirt). |
 | `--ref-front` | Path | `None` | Path to front-angle reference image. |
 | `--ref-left` | Path | `None` | Path to left-angle reference image. |
 | `--ref-right` | Path | `None` | Path to right-angle reference image. |
@@ -175,7 +182,7 @@ usage: human-composer.py bind [-h] --body BODY --hair HAIR
 | `--name` | String | `None` | Custom model name for the subdirectory (default: inferred from `--body`). |
 | `--preview` | Flag | `False` | Generate high-resolution static preview render (`preview.png`). |
 | `--preview-anim` | Flag | `False` | Generate sequenced showcase preview animation video (`preview_animation.mp4`). |
-| `--intermediate` | Flag | `False` | Also output multi-angle renders and side-by-side reference comparison images. |
+| `--intermediate` | Flag | `False` | Output isolated part previews (`part_<name>.png`), composite views, and reference comparison images. |
 | `--anim` | Path | `None` | Path to optional skeletal animation file (USDZ/USDC) to play in Phase 3 of preview animation. |
 | `--blender` | Path | Auto | Path to custom Blender executable. |
 

@@ -128,8 +128,16 @@ def handle_bind(args):
         print(f"[Error] Body model not found: {args.body}", file=sys.stderr)
         sys.exit(1)
 
-    if not os.path.exists(args.hair):
+    if not args.hair and not args.upper:
+        print("[Error] Please specify at least one accessory or garment to bind: --hair <path> or --upper <path>", file=sys.stderr)
+        sys.exit(1)
+
+    if args.hair and not os.path.exists(args.hair):
         print(f"[Error] Hair model not found: {args.hair}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.upper and not os.path.exists(args.upper):
+        print(f"[Error] Upper garment model not found: {args.upper}", file=sys.stderr)
         sys.exit(1)
 
     model_name = derive_model_name(args.body, args.name)
@@ -164,7 +172,10 @@ def handle_bind(args):
 
     print(f"[Human Composer] Blender: {blender_bin}")
     print(f"[Human Composer] Body: {args.body}")
-    print(f"[Human Composer] Hair: {args.hair}")
+    if args.hair:
+        print(f"[Human Composer] Hair: {args.hair}")
+    if args.upper:
+        print(f"[Human Composer] Upper: {args.upper}")
     print(f"[Human Composer] Model Directory: {model_dir}")
     print(f"[Human Composer] Target USDZ: {output_usdz}")
     if preview_img_path:
@@ -191,8 +202,8 @@ def handle_bind(args):
         print(f"[Human Composer] Analyzed reference views: {list(ref_data.keys())}")
         for v, d in ref_data.items():
             print(f"  - {v}: head width={d['head_width']}px, center={d['head_x_center']:.1f}px")
-    else:
-        print("[Human Composer] No reference images provided. Using geometric scalp alignment.")
+    elif args.hair:
+        print("[Human Composer] No reference images provided. Using geometric scalp alignment for hair.")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     blender_script = os.path.join(script_dir, "core", "blender_binder.py")
@@ -200,7 +211,8 @@ def handle_bind(args):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         config = {
             "body": os.path.abspath(args.body),
-            "hair": os.path.abspath(args.hair),
+            "hair": os.path.abspath(args.hair) if args.hair else None,
+            "upper": os.path.abspath(args.upper) if args.upper else None,
             "anim": os.path.abspath(args.anim) if args.anim else None,
             "output_usdz": output_usdz,
             "preview_image_path": preview_img_path,
@@ -302,7 +314,10 @@ def main():
         "--body", required=True, help="Path to input body USDZ model."
     )
     bind_parser.add_argument(
-        "--hair", required=True, help="Path to input hair USDZ model."
+        "--hair", default=None, help="Path to input hair accessory USDZ model."
+    )
+    bind_parser.add_argument(
+        "--upper", default=None, help="Path to input upper garment USDZ model (e.g. suit, shirt, jacket)."
     )
     bind_parser.add_argument(
         "--ref-front", default=None, help="Path to front reference image."
