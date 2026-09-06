@@ -3,6 +3,93 @@ import vue from '@vitejs/plugin-vue';
 import path from 'path';
 import fs from 'fs';
 
+function matchCharactersForTag(tag, characters) {
+  if (!characters || characters.length === 0) return [];
+  const explicit = tag.characters;
+  if (explicit) {
+    const list = Array.isArray(explicit) ? explicit : explicit.split(',').map(s => s.trim());
+    const matched = characters.filter(c => list.some(e => e === c.name || e.includes(c.name) || c.name.includes(e)));
+    if (matched.length > 0) return matched;
+  }
+  const promptText = tag.prompt || '';
+  const contextText = tag.context_hint || '';
+  const combined = `${promptText} ${contextText}`;
+
+  const matched = [];
+  for (const ch of characters) {
+    const cname = ch.name || '';
+    if (!cname) continue;
+    const tokens = [cname];
+    if (cname.includes('·')) {
+      tokens.push(...cname.split('·').map(p => p.trim()).filter(p => p.length >= 2));
+    }
+    const role = ch.role || '';
+    const enAliases = (role.match(/\b[A-Z][a-z]+\b/g) || []).filter(a => a.length >= 4 && !['Main', 'Character', 'Protagonist', 'Warrior', 'Healer', 'Wizard', 'Adventurer'].includes(a));
+    tokens.push(...enAliases);
+
+    if (tokens.some(tok => combined.includes(tok))) {
+      matched.push(ch);
+    }
+  }
+  return matched;
+}
+
+function composeReferencePrompt(contextPrompt, stylePrompt, hasStyleImage, charRefs) {
+  const sections = [];
+  sections.push(
+    `[TASK: BRAND-NEW SCENE ILLUSTRATION FROM SCRATCH]\n` +
+    `Generate a completely new, original standalone illustration strictly depicting the SCENE DESCRIPTION below.\n` +
+    `CRITICAL CONSTRAINTS:\n` +
+    `- DO NOT edit, inpaint, crop, or modify the provided reference image(s).\n` +
+    `- DO NOT copy the compositions, backgrounds, camera perspectives, or poses from the reference image(s).\n` +
+    `- The environment, action, composition, and physical staging must originate 100% from the SCENE DESCRIPTION.`
+  );
+
+  const refRoles = ['[REFERENCE IMAGE ROLES]'];
+  let currentImgIdx = 1;
+  if (hasStyleImage) {
+    refRoles.push(
+      `- Reference Image ${currentImgIdx} (Artistic Style Reference):\n` +
+      `  * Adopt ONLY the artistic medium, sculpted/painterly textures, color palette, lighting atmosphere, and visual aesthetic shown in Image ${currentImgIdx}.\n` +
+      `  * Do NOT copy the specific objects, buildings, or layout of Image ${currentImgIdx}.`
+    );
+    currentImgIdx++;
+  }
+
+  for (const ch of (charRefs || [])) {
+    const cname = ch.name || 'Character';
+    refRoles.push(
+      `- Reference Image ${currentImgIdx} (Character Identity Reference: ${cname}):\n` +
+      `  * Maintain the exact character visual identity, facial features, hairstyle, clothing design, colors, and proportions of ${cname} from Image ${currentImgIdx}.\n` +
+      `  * Place ${cname} naturally into this new scene, dynamically adopting the action, pose, and emotion specified in the SCENE DESCRIPTION.\n` +
+      `  * Do NOT replicate the pose, camera framing, or background of Image ${currentImgIdx}.`
+    );
+    currentImgIdx++;
+  }
+
+  sections.push(refRoles.join('\n'));
+  sections.push(`[SCENE DESCRIPTION & ACTION]\n${(contextPrompt || '').trim()}`);
+
+  const charDnaItems = [];
+  for (const ch of (charRefs || [])) {
+    const cname = ch.name || '';
+    const cdna = ch.visual_dna || '';
+    if (cdna) {
+      const shortDna = cdna.includes('.') ? cdna.split('.')[0].trim() : cdna.slice(0, 140).trim();
+      charDnaItems.push(`- ${cname}: ${shortDna}`);
+    }
+  }
+  if (charDnaItems.length > 0) {
+    sections.push(`[CHARACTER VISUAL DNA HIGHLIGHTS]\n${charDnaItems.join('\n')}`);
+  }
+
+  if (stylePrompt && stylePrompt.trim()) {
+    sections.push(`[ARTISTIC STYLE SPECIFICATION]\n${stylePrompt.trim()}`);
+  }
+
+  return sections.join('\n\n');
+}
+
 function storybookOutputsPlugin() {
   const outputsDir = path.resolve(__dirname, '../outputs');
   const examplesDir = path.resolve(__dirname, '../examples');
@@ -271,6 +358,38 @@ function storybookOutputsPlugin() {
                 (tag.asset && a.name === path.basename(tag.asset))
               );
 
+              const matchedChars = matchCharactersForTag(tag, characters);
+              const charRefsData = matchedChars.map(ch => {
+                const cname = ch.name || '';
+                const imgs = ch.images || [];
+                const cImg = imgs.length > 0 ? imgs[0] : null;
+                return {
+                  name: cname,
+                  role: ch.role || 'Character',
+                  visual_dna: ch.visual_dna || '',
+                  image: cImg,
+                  assetUrl: cImg ? `/api/asset/${encodeURIComponent(stem)}/char-ref/${encodeURIComponent(cname)}/${encodeURIComponent(cImg)}` : null,
+                  role_guide: `Character Identity Reference: ${cname} (Context Matched)`
+                };
+              });
+
+              const styleImgs = style.images || [];
+              const styleImg = styleImgs.length > 0 ? styleImgs[0] : null;
+              const styleRefData = styleImg ? {
+                name: styleImg,
+                assetUrl: `/api/asset/${encodeURIComponent(stem)}/style-ref/${encodeURIComponent(styleImg)}`,
+                style_name: style.style_name || 'Art Style',
+                style_prompt: style.style_prompt || '',
+                role: 'Style Reference (Always Active)'
+              } : null;
+
+              const composedPrompt = composeReferencePrompt(
+                tag.prompt || '',
+                style.style_prompt || '',
+                !!styleImg,
+                charRefsData
+              );
+
               return {
                 ...tag,
                 type: tagType,
@@ -278,7 +397,11 @@ function storybookOutputsPlugin() {
                 prompt: tag.prompt || '',
                 context_hint: tag.context_hint || '',
                 isGenerated: !!matched,
-                matchedAsset: matched || null
+                matchedAsset: matched || null,
+                style_ref: styleRefData,
+                character_refs: charRefsData,
+                composed_prompt: composedPrompt,
+                cli_command: `python3 storybook.py media generate outputs/${stem}/${stem}-output.md --id ${tagId}`
               };
             });
 

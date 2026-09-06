@@ -81,6 +81,16 @@
             <h3 class="card-title">Reference Moodboard</h3>
             <span class="card-sub">Visual references used by image & video generation models</span>
           </div>
+          <label class="clean-btn clean-btn-xs upload-photo-btn">
+            <span class="material-symbols-rounded">cloud_upload</span>
+            <span>Upload Style Image</span>
+            <input
+              type="file"
+              accept="image/*"
+              class="sr-only"
+              @change="onUploadStyleImage"
+            />
+          </label>
         </div>
 
         <div v-if="styleImages.length > 0" class="style-images-grid">
@@ -96,6 +106,14 @@
               class="style-img"
               loading="lazy"
             />
+            <button
+              type="button"
+              class="style-trash-btn"
+              title="Delete style reference image"
+              @click.stop="onDeleteStyleImage(img)"
+            >
+              <span class="material-symbols-rounded">delete</span>
+            </button>
             <div class="img-overlay">
               <span class="img-name">{{ img }}</span>
               <span class="material-symbols-rounded zoom-icon">fullscreen</span>
@@ -114,7 +132,7 @@
 
 <script setup>
 import { computed, ref } from 'vue';
-import { getStyleImageUrl } from '../services/api';
+import { getStyleImageUrl, uploadReferenceImage, deleteReferenceImage } from '../services/api';
 
 const props = defineProps({
   stem: {
@@ -127,9 +145,45 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['preview']);
+const emit = defineEmits(['preview', 'refresh']);
 
 const copiedKey = ref(null);
+
+async function onUploadStyleImage(event) {
+  const file = event.target.files?.[0];
+  if (!file || !props.stem) return;
+
+  try {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      await uploadReferenceImage(props.stem, {
+        type: 'style',
+        filename: file.name,
+        imageBase64: dataUrl
+      });
+      emit('refresh');
+    };
+    reader.readAsDataURL(file);
+  } catch (err) {
+    console.error('Failed to upload style image:', err);
+    alert(`Failed to upload style image: ${err.message}`);
+  }
+}
+
+async function onDeleteStyleImage(imgName) {
+  if (!confirm(`Are you sure you want to delete style reference "${imgName}"?`)) return;
+  try {
+    await deleteReferenceImage(props.stem, {
+      type: 'style',
+      filename: imgName
+    });
+    emit('refresh');
+  } catch (err) {
+    console.error('Failed to delete style image:', err);
+    alert(`Failed to delete style image: ${err.message}`);
+  }
+}
 
 const styleImages = computed(() => {
   return props.styleData.images || [];
@@ -222,6 +276,33 @@ async function copyText(text, key) {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.upload-photo-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+}
+
+.upload-photo-btn .material-symbols-rounded {
+  font-size: 16px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .style-title-group {
@@ -335,6 +416,40 @@ async function copyText(text, key) {
 
 .zoom-icon {
   font-size: 18px;
+}
+
+.style-trash-btn {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(254, 242, 242, 0.95);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  z-index: 2;
+  padding: 0;
+}
+
+.style-image-wrap:hover .style-trash-btn {
+  opacity: 1;
+}
+
+.style-trash-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+  transform: scale(1.1);
+}
+
+.style-trash-btn .material-symbols-rounded {
+  font-size: 15px;
 }
 
 .no-images-box {

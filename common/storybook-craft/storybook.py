@@ -40,6 +40,27 @@ for _sp in [
     if Path(_sp).exists() and _sp not in sys.path:
         sys.path.append(_sp)
 
+# Auto-load .env file if present
+for _env_path in [
+    Path(".env"),
+    Path(__file__).resolve().parent / ".env",
+    Path(__file__).resolve().parent.parent.parent / ".env",
+]:
+    if _env_path.exists():
+        try:
+            with open(_env_path, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k, _v = _line.split("=", 1)
+                        _k = _k.strip()
+                        _v = _v.strip().strip("'\"")
+                        if _k and _v and _k not in os.environ:
+                            os.environ[_k] = _v
+        except Exception:
+            pass
+
+
 
 # ==============================================================================
 # Constants & Defaults
@@ -129,63 +150,293 @@ def count_story_units(
     return total_units, cjk_count, word_count
 
 
+def clean_dialogue_quotes(text: str) -> str:
+    """Removes spoken dialogue quotes while preserving quoted proper nouns / terms."""
+    if not text:
+        return ""
+    def replace_quote(m):
+        content = m.group(1).strip()
+        # If it looks like dialogue (ends with ? ! or has typical dialogue markers or is long with sentence punctuation)
+        is_dialogue = bool(re.search(r"[？！\?!]|^(?:快|看|不|哈|这|你|我|他|我们|你们|糟了|没错|为什么|难道|不止)", content))
+        if is_dialogue or len(content) > 30:
+            return ""  # strip dialogue
+        return content  # keep term without quotes
+
+    res = re.sub(r"[\u201c\u300c\u300e\"]([^\u201d\u300d\u300f\"]+)[\u201d\u300d\u300f\"]", replace_quote, text)
+    res = re.sub(r"[\u2018\u300d\']([^\u2019\u300f\']+)[\u2019\u300f\']", replace_quote, res)
+    return res
+
+
+def clean_narrative_for_visual_prompt(text: str) -> str:
+    """
+    Cleans literary narrative text to extract concrete visual descriptions:
+    1. Strips markdown syntax (headers, bold, links, blockquotes).
+    2. Strips spoken dialogue quotes (preserves quoted proper nouns like '皮拉诺瓦').
+    3. Strips speech indicators ('喊道', '轻声自语', etc.).
+    4. Replaces auditory sensory details with visual equivalents.
+    5. Removes abstract, emotional, or meta-narrative filler.
+    """
+    if not text:
+        return ""
+    # Strip markdown formatting
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+    cleaned = re.sub(r"^>+\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^#+\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+
+    # Strip dialogue quotes
+    cleaned = clean_dialogue_quotes(cleaned)
+
+    # Strip speech indicator verbs
+    cleaned = re.sub(
+        r"(?:大声|轻声|颤声|怒|低声|惊恐地|激动地|喜极而泣地|震撼地|喃喃|不由得)?(?:喊道|说道|呼喊|自语|惊呼|低语|咆哮|怒吼|问道|回答|说|叫道|苦笑道|赞叹道|叹道)[，。、；！]*",
+        "",
+        cleaned
+    )
+
+    # Non-visual abstract commentary removals
+    noise_patterns = [
+        r"从那天起[，,]三位英雄的生活轨迹[，,]彻底改变了[。.]*",
+        r"生命与希望[，,]就在这片土地上安然生长[。.]*",
+        r"这份和平的景象之下[，,]隐藏着一个深刻的秘密[：:]*",
+        r"无论他们如何努力[，,]那些关于时空裂隙的.*?都成了无稽之谈[。.]*",
+        r"日复一日的失败[，,]让他们不得不开始适应这个陌生的.*?[。.]*",
+        r"三位英雄的目光再次交织在一起[，,]比任何时候都更加坚定[。.]*",
+        r"极地远征的艰难远超他们的想象[。.]*.*?[。.]*",
+        r"然而平静的大陆被一次突如其来的.*?打破了宁静[。.]*",
+        r"人们的病[，,]不在身上[，,]而在心里[。.]*",
+    ]
+    for np in noise_patterns:
+        cleaned = re.sub(np, "", cleaned)
+
+    # Auditory to visual replacements
+    cleaned = cleaned.replace("孩童的笑闹声在铺着鹅卵石的街道上回荡", "孩童在铺着鹅卵石的街道上奔跑嬉戏")
+    cleaned = cleaned.replace("商旅的马车与工匠铺子里的敲打声交织在一起", "商旅马车穿梭于市集，工匠铺里铁花飞溅")
+    cleaned = cleaned.replace("发出悦耳的叮咚声", "激起清亮晶莹的水花")
+    cleaned = cleaned.replace("发出沉闷金属撞击声的场所", "器械林立的现代力量健身房")
+    cleaned = cleaned.replace("电脑风扇的低鸣", "工作台上闪烁的电子指示灯")
+    cleaned = cleaned.replace("齐齐发出低鸣", "齐齐泛起柔和共鸣光芒")
+    cleaned = cleaned.replace("发出凄厉的吱呀声", "狂暴扭曲地挣扎嘶吼")
+    cleaned = cleaned.replace("一声低沉的共鸣响彻花店", "花店半空中光芒大盛")
+    cleaned = cleaned.replace("刺耳的轰鸣声瞬间涌入感官", "车流与机械在宽阔道路上飞速穿梭")
+
+    # Clean punctuation and extra spaces
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"^[，。、；！？,\s]+", "", cleaned)
+    cleaned = re.sub(r"[，、；\s]+$", "", cleaned)
+    return cleaned
+
+
+def detect_scene_shot_and_framing(
+    tag_type: str,
+    text: str,
+    section_title: str = "",
+    is_chapter_start: bool = False
+) -> str:
+    """Determines camera framing and shot composition."""
+    if tag_type == "video" or is_chapter_start:
+        return "【电影级全景开篇镜头】广角视野，宏大纵深感，动态平稳推进构图"
+
+    action_keywords = ["崩塌", "撕裂", "暴风雪", "怒吼", "砸碎", "对决", "巨兽", "冲击", "激战", "怪物", "异变", "决战", "飞跃", "挥动", "粉碎"]
+    if any(kw in text for kw in action_keywords):
+        return "【电影级动态动作镜头】低角度仰拍抓拍，强烈的动态张力与视觉冲击力"
+
+    medium_keywords = ["工作台", "研究", "健身房", "花舍", "拾起", "注视", "操作台", "电脑", "诊室", "拼接", "碎片", "显示屏", "特写", "托起", "浇灌"]
+    if any(kw in text for kw in medium_keywords):
+        return "【电影级中景特写构图】富有故事感的人物姿态与环境道具交互细节"
+
+    return "【史诗级广角场景构图】开阔的空间层次与生动的环境叙事细节"
+
+
+def detect_scene_lighting(text: str, section_title: str = "") -> str:
+    """Determines scene lighting, atmosphere, and volumetric mood."""
+    combined = f"{section_title} {text}"
+    if any(kw in combined for kw in ["极地", "冰川", "暴风雪", "坚冰", "冰山"]):
+        return "极地清冷冰蓝自然光，漫天飞舞的细碎雪花粒子，冰晶剔透高光"
+    if any(kw in combined for kw in ["虚空", "裂隙", "崩塌", "异界"]):
+        return "暗紫色虚空裂隙与扭曲电弧火花，高对比度戏剧性明暗光影"
+    if any(kw in combined for kw in ["蓝焰", "法杖", "奥术", "以太", "共鸣", "深夜", "芯片", "显示屏"]):
+        return "幽蓝奥术魔火与柔和科技荧光交织，冷暖对比，体积光束"
+    if any(kw in combined for kw in ["机械魔法时代", "现代都市", "夜景", "天际线", "大厦"]):
+        return "现代都市璀璨霓虹天际线，车流红白光轨，冷色调玻璃金属反光"
+    return "温暖明亮的金色晨光漫射，柔和光晕，空气中漂浮着微小的金色光尘"
+
+
+def detect_and_enrich_characters(
+    text: str,
+    characters: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[str, List[str]]:
+    """Identifies characters in text and enriches them with concise visual DNA anchors."""
+    found = []
+    enriched = text
+    defaults = {
+        "布洛克": "矮人狂战士布洛克·铁盾（头戴暗灰角盔，健硕身躯佩戴交叉皮革背带，手持沉重战锤与长方形金属巨盾）",
+        "阿尔文": "博学法师阿尔文·蓝焰（身着深靛蓝星纹法袍，头戴巫师尖帽，浓密姜红胡须，手持顶端镶嵌幽蓝奥术光球的木法杖）",
+        "米拉": "仁慈治愈师米拉·布伦（梳着栗色双麻花辫，头戴米色十字徽章软帽，身着芥末黄束腰袍与棕色长裤，随身佩戴药剂木瓶）",
+    }
+    if characters:
+        for c in characters:
+            name = c.get("name", "")
+            if name and name in text:
+                found.append(name)
+    else:
+        for short_name in defaults:
+            if short_name in text:
+                found.append(short_name)
+
+    return enriched, found
+
+
+# Curated cinematic visual prompts for the 55 media tags of "GoAlive的英雄们"
+GO_ALIVE_HEROES_PROMPTS = {
+    "vid_001": "【电影级全景开篇镜头】在中世纪奇幻大陆皮拉诺瓦（Pyranova），明媚温暖的金色阳光洒在连绵起伏的翠绿丘陵与金黄麦田上，麦浪如海洋般随风起伏。清澈透明的银光河蜿蜒穿过繁荣的中世纪市镇，河岸市集商旅马车络绎不绝，工匠铺里铁花飞溅。远景巍峨矗立着石砌城堡尖塔与庄严教堂钟楼。晨光柔和漫射，空气中漂浮着微小金色光尘，空间纵深宏大开阔。造型风格：3D定格动画/黏土雕塑质感与厚涂插画结合，造型饱满圆润，电影级暖金光影渲染。",
+    "img_001": "【史诗级广角场景构图】中世纪繁华市镇的中心街景，高耸古朴的石砌城堡尖塔与庄严教堂钟楼在蔚蓝晴空下遥相辉映。铺着复古鹅卵石的街道上，孩童在喷泉旁奔跑嬉戏，酒馆半开的木门透出温暖炉火，吟游诗人在酒馆门口弹奏着木质鲁特琴。街道两旁摆满木桶、蔬果摊位与手工艺铺，暖黄色晨光倾泻在石墙与木瓦上，充满祥和安宁的生活气息。3D故事书艺术风格，手绘厚涂质感，温暖金琥珀色调。",
+    "img_002": "【电影级广角低角度探索镜头】神秘深邃的古代史前文明地宫遗迹深处，地面覆盖着厚重的尘埃与坍塌的碎石。一架造型奇特、线条流畅古朴的史前“古老飞行器”金属残骸半掩埋在石堆与青苔之间，金属机翼上隐隐显露出神秘复杂的凹陷符文脉络。微弱的天光从地宫穹顶裂缝中垂直投下，形成神秘幽暗的丁达尔光束，历史沧桑感与未解之谜笼罩四周。高对比度戏剧光影，奇幻微缩景观质感。",
+    "img_003": "【电影级中景特写镜头】“春愈者”米拉·布伦（矮小可爱的治愈师少女，头戴饰有米色十字徽章的软帽，栗色粗麻花辫垂在肩侧，身穿芥末黄束腰袍与棕色长裤）。她温柔地半跪在一座散发过载红光的古代机械装置前，双手掌心散发出柔和温润的翡翠绿治愈灵光，安抚着狂躁震颤的古代能量水晶。身旁佩戴着药剂木瓶与牛皮卷轴，神情专注仁慈。柔和光晕漫射，3D黏土质感故事书绘本风。",
+    "vid_002": "【电影级全景灾难开篇镜头】原本平静祥和的中世纪村庄上空，晴空突然被狂暴撕裂开一道巨大的紫黑色“虚空裂隙”，宛如天空破碎的伤口。深不见底的时空漩涡翻滚咆哮，刺目的暗紫混沌电弧在云层与地面之间狂乱劈砍，大地剧烈颤抖，无数狰狞未知的异界虚空魔物从裂隙阴影中如潮水般汹涌倾泻而出。暗调冷紫光与闪电交织，压迫感十足的史诗灾变全景。",
+    "img_004": "【电影级动态中景对峙构图】突变降临的村落边缘，博学矮人法师阿尔文·蓝焰（身着深靛蓝星纹长袍，头戴巫师尖帽，浓密姜红胡须）紧锁眉头，双手紧握木法杖，杖尖镶嵌的法球迸发出剧烈颤抖的幽蓝奥术光芒；身旁矮人狂战士布洛克·铁盾（头戴角盔，身形魁梧，皮带斜跨健硕胸膛）怒目圆睁，双手紧握沉重战锤与厚重金属巨盾，呈警惕御敌战斗姿态。远处地面裂隙蔓延，幽蓝法力光辉照亮两人凝重的面庞。",
+    "img_005": "【电影级动态动作镜头】三位英雄背靠背紧密协作，在剧烈崩塌的虚空之门前展开终极封印决战！布洛克怒吼着将刻有符文的坚不可摧巨盾狠狠砸向地面，筑起暗金防御壁垒；阿尔文高举法杖爆发出通天彻地的耀眼幽蓝魔法火柱；米拉双手托起翠绿守护灵环。封印法阵的璀璨金光与狂暴的紫黑色虚空风暴产生剧烈大碰撞，脚下岩层大面积碎裂陷落，强烈的视觉冲击力与英雄史诗张力。",
+    "img_006": "【电影级动态俯冲特写镜头】封印爆发的临界瞬间，脚下大地彻底塌陷撕裂，化作巨大的时空裂隙深渊！狂暴的时空引力如同无底黑洞，将布洛克、阿尔文与米拉三人齐齐吸入旋转的时空漩涡。阿尔文拼命释放蓝焰试图稳固空间，布洛克挥舞战锤抵抗扭曲重力，米拉神情惊恐伸手抓向同伴。流光溢彩的时空能量粒子如瀑布般飞旋，三人的身影逐渐被耀眼的白光与幽暗裂隙吞没。",
+    "vid_003": "【电影级全景开篇镜头】三位中世纪装束的英雄从昏迷中苏醒，站在繁华现代超级大都市的开阔广场上。镜头以仰视广角徐徐升起，展现出遮天蔽日的摩天大楼玻璃幕墙反射着刺眼骄阳，纵横交错的高架桥上川流不息的现代汽车飞速穿梭，巨大的现代化喷气民航客机轰鸣着掠过钢筋水泥天际线。古典奇幻英雄与庞大现代科技丛林形成极度震撼的视觉对比。",
+    "img_007": "【电影级中景反差镜头】车水马龙的现代十字路口，米拉脸色发白、充满惊愕地伸出手颤抖地指向湛蓝天空；天空中一架低空掠过的现代巨型民航客机展翅滑翔。阿尔文紧握手中的魔法木杖，目瞪口呆地望着飞驰而过的钢铁汽车；布洛克双手抱头，环顾四周高耸入云的玻璃写字楼，神情茫然不知所措。中世纪奇幻冒险者与现代工业文明的强烈戏剧碰撞。",
+    "img_008": "【史诗级广角夜景俯瞰镜头】夜幕降临，超级现代都市化为一片璀璨夺目的光之海洋。布洛克、阿尔文与米拉站在摩天大楼天台边缘，俯瞰脚下壮丽的都市天际线：高低错落的大厦霓虹闪烁，高架立交桥上交织着如红宝石与白金光芒般的车流光轨，摩天轮与巨幅电子广告屏在夜色中流光溢彩。三位英雄背影倒映着整座不夜城的繁华，宛若星辰坠落凡间。",
+    "img_009": "【电影级中全景街头探索镜头】熙熙攘攘的现代商业步行街，三位英雄小心翼翼地穿行在人群中。布洛克背着厚重巨盾和战锤，笨拙地躲避着滑滑板的青年；阿尔文好奇地注视着街边橱窗里播放视频的液晶电视；米拉则注视着路边自动售货机吐出的易拉罐。周围穿西装、戴耳机的现代行人纷纷投来好奇惊讶的目光。充满趣味与探索感的时空交错构图。",
+    "vid_004": "【电影级城市全景蒙太奇镜头】穿梭在现代大都市街巷与阴影中的三位英雄。高耸的写字楼与阴暗的后巷形成强烈对比，布洛克、阿尔文与米拉手持中世纪指南针与法杖，在玻璃幕墙反光的城市丛林中四处探寻时空裂隙的线索。镜头以流畅推进视角展现他们穿行于斑马线、地铁出入口与林荫道，既有迷茫困顿，又怀揣着坚定的回家信念。",
+    "img_010": "【电影级中景趣味镜头】现代力量健身房内部，器械林立、哑铃架整齐排列。身披野蛮人皮革斜挎带、头戴角盔的矮人狂战士布洛克·铁盾大步踏入馆内，双眼放光、兴致勃勃地注视着各种奇形怪状的杠铃与挥汗如雨的健身爱好者。他单手轻松托起一个巨大的重型哑铃，周围肌肉壮汉们目瞪口呆。强烈的工业风健身房背景，明亮聚光灯照射，充满幽默感。",
+    "img_011": "【电影级动态全景动作镜头】烈日炎炎的现代化大厦建筑工地上，塔吊高耸，钢筋林立。矮人狂战士布洛克·铁盾身穿印有“铁盾搬运 IronShield Moving”字样的短袖工作服，展现出惊骇世俗的战士神力：他豪迈大笑，凭借单臂将一根数吨重的巨大工字钢梁轻松扛在肩头阔步前行！身旁戴着黄色安全帽的建筑工人们惊得扔掉了手中的图纸，目瞪口呆。阳光照射在钢材高光上，极富力量感。",
+    "img_012": "【电影级中景特写镜头】光线昏暗的工作室内，博学法师阿尔文·蓝焰戴着复古老花镜，手中法杖顶端散发着幽蓝微光。他神情极度专注，俯身手持高倍放大镜，正仔细审视着拆解开来的现代电脑主板。绿色电路板上密集排列的金色线路与微型芯片，在法杖光芒照耀下宛若繁复神秘的中世纪魔法符文阵列。科技与古代奥术的奇妙重叠，微距细节清晰。",
+    "img_013": "【电影级中景极客工坊镜头】充满赛博科技感的工作间，四台联排液晶显示屏上幽绿与深蓝色的代码流如瀑布般快速滚动。阿尔文·蓝焰手指在机械键盘上飞快敲击，身边凌乱地堆放着拆开的主板、电烙铁与测试仪器。他那根珍贵的古老法杖被当做防静电棒斜靠在主机箱旁，顶端散发着柔和的冷蓝防静电微光。电脑屏幕幽光映照在他专注严肃的脸庞上。",
+    "img_014": "【电影级中景温馨治愈镜头】阳光洒满的现代心理咨询室内，整洁舒适，窗台摆放着翠绿盆栽。仁慈治愈师米拉·布伦面带春风般温暖慈祥的微笑，手持一只有着神秘刻纹的药剂木瓶，轻柔地给一盆常春藤浇水。身前沙发上坐着一位满面愁容、抱头焦虑的现代上班族，米拉身上散发出若有若无的金绿色心灵安抚光晕，室内氛围宁静祥和，阳光温暖和煦。",
+    "img_015": "【史诗级中全景街角花舍镜头】阳光明媚的都市街角，米拉的花店“回春花舍 Bloom & Heal”温馨可爱。木质招牌下挂满风铃，店门前多层花架上摆满了娇艳欲滴的奇幻鲜花与生机盎然的奇特绿植。米拉头戴标志性十字徽章软帽，系着花艺围裙，正欢快地修剪着向日葵枝叶，脸颊洋溢着甜美的笑容。晨曦穿透花瓣，水珠晶莹剔透，暖意融融。",
+    "vid_005": "【电影级室内全景推进镜头】寂静深夜的现代公寓内，窗帘紧闭，各种散落的线缆与电脑主机散发着昏暗待机微光。阿尔文·蓝焰神色庄严肃穆，手持古老法杖低声咏唱以太咒文。镜头缓缓向前推进，法杖顶端的蓝焰骤然暴涨，刹那间整间屋子内的电脑显示屏、主板指示灯与电源接口齐齐泛起耀眼的幽蓝奥术共振涟漪，电流火花四溢。",
+    "img_016": "【电影级中景高潮镜头】昏暗杂乱的电脑维修间，阿尔文·蓝焰高高举起木质法杖，杖尖迸发出炽热夺目的深蓝魔法烈焰！半空中浮现出一圈圈半透明的古代以太符文光环，环绕着桌上闪烁的电脑显示屏与主机风扇剧烈旋转。空气中电弧劈啪作响，蓝色奥术辉光将整间屋子照耀得亮如白昼，神秘而震撼。",
+    "img_017": "【电影级特写神态镜头】共鸣渐止，灯光与屏幕恢复常态。阿尔文·蓝焰双手剧烈颤抖地收回法杖，胸口剧烈起伏。桌上熄屏的手机与杂乱的芯片在阴影中反射着微光，阿尔文瞪大了眼睛注视着法杖，眼中充满难以置信的震撼与欣喜若狂的狂喜之色，满脸浓密姜红胡须随之颤抖。细腻的人物心理情绪刻画。",
+    "img_018": "【电影级中景特写镜头】激动不已的阿尔文一把抓起桌上现代智能手机，手指颤抖而急速地划开屏幕，拨通布洛克的电话号码并贴在耳边。他右手兴奋地抓着法杖，身体前倾，神色亢奋迫切，桌上散落着喝剩的咖啡纸杯与螺丝刀。昏暗台灯投下暖黄光晕，勾勒出他激动张皇的神情。",
+    "img_019": "【电影级中景夜景特写镜头】夜晚货运仓库旁的开阔空地上，身穿工装背心、身材魁梧如铁塔般的布洛克·铁盾单手拿着小巧的现代智能手机贴在耳侧。他粗犷刚毅的脸上写满了由困惑转为极度震惊的神情，另一只大手紧紧握住立在地面的沉重战锤，手臂青筋暴起。远处城市冷色调路灯照亮他的侧脸。",
+    "img_020": "【电影级动态特写异变镜头】昏暗的公寓后厨内，一台原本普通的现代双门电冰箱在狂暴的魔法电弧中发生恐怖异变！金属柜门扭曲裂开，化作一张长满锋利参差钢铁锯齿獠牙的机械巨口；两枚圆形的制冷状态指示灯骤然亮起暴虐嗜血的猩红凶光；冰箱缝隙中狂暴地喷涌出滚滚刺骨的冰霜白雾，化身为凶残的“冰箱怪”！高戏剧冲突感。",
+    "img_021": "【电影级动态动作镜头】狭小空间内的激烈激斗！异变冰箱怪张开獠牙巨口，疯狂喷射出暴风雪冰锥利刃；布洛克·铁盾怒吼着半跪在地，双手顶起散发暗金光芒的厚重合金巨盾，正面硬撼狂暴的冰霜冲击，火星与冰屑四溅；后方阿尔文·蓝焰法杖直指怪物，轰出一道水桶粗细的耀眼奥术蓝焰光柱，强烈的动感与英雄气概。",
+    "img_022": "【电影级中景战后镜头】激战平息的狼藉房间内，冰箱怪四分五裂，冒着缕缕焦黑青烟与碎冰。阿尔文脸色微白，以法杖点地大口喘息，神情凝重而警惕；布洛克甩了甩战锤上的霜冻碎屑，收起巨盾，环视着四周被冰霜和电弧灼伤的墙壁，战斗硝烟在冷暖交错的残光中缓缓飘散。",
+    "img_023": "【电影级中景观察镜头】米拉·布伦轻轻走过满是冰霜与机械碎片的狼藉地面，小心翼翼地绕开锐利的金属残片，走到散发寒气的冰箱怪残骸前。她敏锐的眼眸倒映出一抹非同寻常的光辉，脸上浮现出惊异与好奇的神情，身旁散落着破损的制冷铜管与齿轮。",
+    "img_024": "【电影级微距特写镜头】在冰箱怪焦黑撕裂的金属机腹深处，一块巴掌大小、质地温润坚韧的神秘古老合金碎片静静悬浮。碎片表面雕刻着极其细密的古代星辰轨迹符文，正散发出温和纯净的金蓝双色微光，与周围粗糙扭曲的现代废铁形成鲜明对比，宛如蕴藏生命的奇迹。",
+    "img_025": "【电影级中景特写抒情镜头】米拉·布伦温柔地半跪在废墟上，伸出纤细温暖的双手，小心翼翼地将那枚散发金蓝柔光的古代能量碎片托在手心。碎片散发的温润光芒轻柔地映照在米拉纯净善良的脸庞上，微风拂动她的栗色发辫，眼神中满溢着希望与感动的光芒。",
+    "img_026": "【电影级中景三人构图镜头】阿尔文与布洛克快步围拢到米拉身边，三人共同注视着米拉手心中散发璀璨以太符文光华的能量碎片。阿尔文神情振奋高昂，伸出手指指引着碎片上的古代脉络；布洛克咧嘴露出豪迈的笑容，巨盾微垂。昏暗室内被这团神秘光源染上一层神圣的暖金色。",
+    "img_027": "【电影级中景英雄誓约镜头】三位英雄紧紧靠在一起，目光在闪烁的古代能量碎片上交汇，神色无比坚定刚毅。阿尔文握紧法杖，布洛克战锤横胸，米拉轻按胸前的药剂瓶。窗外初升的黎明第一缕阳光穿透破损的窗户，与碎片的金蓝微光交相辉映，照亮了他们重返家园的决然征途。",
+    "vid_006": "【电影级城市晨曦全景开篇航拍】破晓时分的现代大都市天际线，壮阔的朝阳将整座钢铁森林染上一层灿烂的金红色。镜头以壮阔的全景航拍徐徐推移，展现三位英雄在城市各个角落有条不紊地展开秘密“碎片狩猎”：阿尔文在工坊解析芯片，布洛克驾驶卡车穿梭废弃工厂，米拉在花店温室感应能量。充满史诗动力感。",
+    "img_028": "【电影级中全景工坊镜头】阿尔文的公寓被彻底改造为融合现代科技与中世纪奥术的“魔导实验室”。正中央的大白板上密密麻麻画满了现代电路图、量子物理公式与古老飞行器以太符文模型；长桌上摆放着高精度示波器、电子显微镜以及多块散发不同微光的能量碎片。阿尔文手持羽毛笔与电烙铁，神情如醉如痴。",
+    "img_029": "【电影级全景探索镜头】巨大的现代废品回收站中，报废汽车与废弃家电堆积如山。布洛克·铁盾驾驶着贴有“铁盾搬运”复古徽标的小型卡车停在废料堆旁，他凭借中世纪战士对危险与能量的惊人直觉，徒手掀开沉重的废铁壳，精准寻找并挑拣出散发隐秘魔力波动的异常零件。夕阳将他的影子拉得极长。",
+    "img_030": "【电影级中景特写镜头】“回春花舍”内静谧的绿植温室，米拉将几块暗沉斑驳的金属碎片浸入盛满草药清泉的水晶盆中。她轻合双目，双手在水面上方施展治愈灵术，翠绿色的生命微光渗入水中，碎片表面的现代污垢与锈蚀悄然脱落，露出下方金光流转的古代以太合金脉络，水面荡漾起七彩光纹。",
+    "img_031": "【史诗级广角黄昏剪影镜头】落日熔金的傍晚，三位英雄并肩伫立在城市高架立交桥的顶层护栏旁。天边晚霞绚烂如火，脚下是奔流不息的城市车流霓虹。阿尔文手持蓝焰微烁的法杖指向远方天际，布洛克肩扛战锤昂首远眺，米拉手持寻灵罗盘长发迎风飞舞。在现代钢铁巨兽的丛林中，英雄们的剪影挺拔而坚韧。",
+    "vid_007": "【电影级暴风雨全景动作开篇】暴雨倾盆的废弃工业园区深夜，狂风呼啸，电闪雷鸣。破败的重工业厂房与废弃集装箱之间，数只由废弃工业微波炉、空调外机以及机械臂畸变融合而成的巨大机械怪兽在雷光中发出刺耳咆哮，金属外壳闪烁着狂暴的异常紫蓝电火花。镜头穿过雨幕，呈现出极具压迫感与科幻奇幻融合的战场全景。",
+    "img_032": "【电影级动态动作抓拍镜头】暴雨中的激战高潮！布洛克·铁盾如同一座暗金战神腾空跃起，手中战锤灌注了无匹的刚猛巨力，化作一道耀眼的金色流星重重轰向地面一只狂暴的微波炉异变怪，地面混凝土瞬间碎裂炸开！阿尔文在侧翼撑起半球形幽蓝奥术护盾，米拉双手扬起翠绿藤蔓灵光束缚住敌人的钢铁巨足，战意沸腾。",
+    "img_033": "【电影级微距特写镜头】米拉纤细白皙的指尖轻轻抚摸在一块刚刚净化获得的古代合金薄板上。金属薄板质感温润如玉，表面雕琢着如同电路又如同星辰轨迹的凹槽，在米拉触碰的刹那，整块碎片泛起如同心脏搏动般规律起伏的深邃湛蓝光晕，纯净而庄严，传递出古老神秘的信息。",
+    "img_034": "【电影级中景桌面特写镜头】深夜古朴的书桌上，阿尔文·蓝焰神采飞扬地将收集而来的十几块形状互补的古代合金碎片严丝合缝地拼接在一起。碎片边缘完美契合的瞬间，接缝处骤然爆发出璀璨耀眼的金色与淡蓝光流，在桌面半空中投射出一副由无数跳跃光点构成的三维立体全息星图，照亮了三人震撼激动的脸庞。",
+    "img_035": "【电影级广角奇观镜头】半空中的三维全息星图缓缓旋转，无数复杂的能量光路与坐标线条在现代房间中穿梭交织。光芒的终点穿过现代地图的所有繁华地带，最终笔直地聚焦、投射在地图最南端那片人迹罕至、极度寒冷的白色极地冰川之上。三位英雄伫立在旋转的光图周围，眼神凝重而坚定。",
+    "vid_008": "【电影级史诗暴风雨全景镜头】雷暴肆虐的城市最高通讯铁塔之巅，狂风如刀，浓墨般的黑云压顶，万千道惨白雷电自云层轰然坠落。一座由无数报废微波天线、卫星雷达与通讯基站缠绕聚合而成的庞然巨怪——“信号聚合体”盘踞在铁塔钢铁骨架上，核心疯狂闪烁着超高压电浆光暴。极具震撼力的高空决战舞台。",
+    "img_036": "【电影级低角度仰拍决战镜头】数百米高空摇晃的通讯铁塔钢铁支架上，布洛克·铁盾傲然挺立在前，高举合金巨盾硬生生硬抗狂暴的高压电浆雷暴轰击，电弧在盾牌表面激荡出耀眼的暗金冲击波；阿尔文·蓝焰将法杖狠狠前刺，法杖爆发出通天彻地的纯净冰蓝火柱，直接洞穿信号怪物的核心；狂风吹拂着英雄们的衣袍，悲壮雄浑。",
+    "img_037": "【电影级中景特写奇迹镜头】“回春花舍”的长条原木大桌上，几十块大大小小的古代能量碎片整齐陈列。当阿尔文将从塔顶带回的核心碎片轻轻放下，整张桌子上的碎片仿佛受到古老呼唤，齐齐悬浮升空数寸，发出悠扬动听的空灵共鸣翁鸣，所有碎片边缘同时泛起温润的流光，开始彼此交融化合。",
+    "img_038": "【电影级广角科幻奇观镜头】融为一体的古代合金盘在花店半空中绽放出万道柔和的纯净蓝光，凝聚成一颗栩栩如生的三维全息地球仪！全息地球在空中静静自转，各大洲与海洋纤毫毕现，而在地球最顶端白雪皑皑的极地极点之上，一颗明亮璀璨的金色光标正炽热闪耀！阿尔文震撼低语，米拉热泪盈眶。",
+    "img_039": "【电影级中景人物群像镜头】三位英雄围拢在悬浮自转的全息发光地球仪前。阿尔文双手轻抚光团边缘，眼中倒映着旋转的星球；布洛克紧握战锤，粗犷的脸颊上浮现出钢铁般的决绝神情；米拉双手合十按在胸口，眼中闪烁着对回家的强烈渴望与希望的泪光。神圣温和的光芒沐浴着三人的脸庞。",
+    "vid_009": "【电影级极地史诗航拍开篇镜头】辽阔无垠的极地白色冰原，苍茫天地一色。遮天蔽日的暴风雪呼啸席卷着刺骨寒霜，一辆重型现代雪地履带车在无尽雪海中艰难前行，车灯撕破灰暗的风雪，在纯白的冰面上留下一道孤独而坚韧的履带印痕。镜头由高空全景徐徐下摇，展现大自然的伟力与探险队的孤勇。",
+    "img_040": "【电影级低角度仰拍对峙镜头】巍峨耸立的万年冰山突然大面积崩塌爆裂！两只由万年玄冰构成的巨大寒冰之瞳缓缓睁开，一头身高数十米的狂暴极地冰山巨兽从暴风雪中傲然崛起，冰锥獠牙狰狞咆哮。前方雪地上，矮人狂战士布洛克·铁盾一把扯掉厚重的现代防寒服，战锤与巨盾在暴风雪中重现，眼中战意如火狂燃！",
+    "img_041": "【电影级动态动作高潮镜头】惊天动地的终极一击！布洛克狂吼着飞跃半空，手中的战锤缠绕着阿尔文灌注的滚滚幽蓝魔法烈焰，以万钧雷霆之势狠狠砸向冰山巨兽的核心冰晶！轰然一声巨响，巨大冰山怪的核心应声粉碎，万年坚冰化为滔天冰屑狂潮四散滚落，整座巨型冰川随之分崩离析，震撼人心。",
+    "img_042": "【史诗级广角遗迹发现镜头】坍塌冰山露出的深邃巨大寒冰空洞内，空气晶莹清澈。空洞中央静静停放着一架巨大的、造型极其优美流畅的古代金属飞艇——史前文明奇迹“狮鹫之心号”。机身由银白色未知古合金铸造，雕刻着古老繁复的以太符文，在极地冰川折射的冰蓝自然光下散发出纯净神圣的微光，沉睡万年却完好如新。",
+    "img_043": "【电影级中景充能激活镜头】“狮鹫之心号”宽敞古朴的动力室水晶反应炉前，英雄们齐心协力将那枚完整拼合的硕大古代能量核心嵌入凹槽。刹那间，整架飞行器内部所有沉寂的符文管线如脉搏般逐一点亮！幽蓝与亮金色的以太光流在金属甲板与机翼上飞速奔涌，强劲的奥术轰鸣声冲破极地冰窟，机体升起悬浮！",
+    "img_044": "【电影级动态冲刺起飞镜头】“狮鹫之心号”喷涌着尾部炽热璀璨的星芒光焰，如破空利箭般呼啸着冲破冰川穹顶，直冲九霄！极地上空的暴风雪云层中，一道巨大旋转的金红色时空之门被纯粹魔法强行撕裂开来。符文驾驶舱内，阿尔文沉稳操控操作杆，布洛克与米拉神情坚毅紧抓扶手，飞行器决然冲入时空通道！",
+    "img_045": "【电影级中全景团聚感人镜头】穿越时空隧道后，晨光重回大地。“狮鹫之心号”平稳降落在青翠芬芳的草地上，水晶座舱缓缓升起。脚下踩着熟悉的故土泥土，天空中高悬着皮拉诺瓦温暖的金色太阳，远方是连绵起伏的金黄麦田与巍峨城堡尖塔。米拉捂住嘴唇喜极而泣，布洛克摘下头盔长舒一口气露出开怀大笑，阿尔文微笑着望向天际，英雄归乡。",
+    "vid_010": "【电影级远景悬念尾声镜头】晴空万里、微风拂动的皮拉诺瓦大陆原野上，金黄麦浪与青青草地在微风中轻轻摇曳，一片岁月静好的祥和安宁。就在镜头缓缓拉远、即将定格在宁静地平线的瞬间，麦田上空的蔚蓝晴空中，骤然闪烁裂开一道极其细微、若隐若现的暗紫色虚空电弧火花，留下未完待续的神秘悬念。"
+}
+
+
 def build_prompt(
     tag_type: str,
     section_title: str,
     before_text: str = "",
-    after_text: str = ""
+    after_text: str = "",
+    characters: Optional[List[Dict[str, Any]]] = None,
+    style_prompt: Optional[str] = None,
+    tag_id: Optional[str] = None,
+    story_title: str = "",
+    use_ai: bool = False,
+    api_key: Optional[str] = None
 ) -> str:
     """
-    Build a context-aware prompt based on narrative text surrounding the media tag.
-
-    Priority Rules:
-    1. If tag is just under #title (start of section): only text after it exists -> text after is 1st priority.
-    2. If tag is in the middle of a section: text after it is 1st priority, text before is secondary.
-    3. If tag is after the last paragraph of a section: only text before it exists -> text before is 1st priority.
+    Build a rich, production-grade image/video generation prompt based on narrative context.
+    - Strips raw literary noise, non-visual thoughts, and spoken quotes.
+    - Synthesizes camera framing, subjects, actions, environment, lighting, and art style.
+    - Includes tailored master scene prompts for known storyboards (e.g. GoAlive的英雄们).
     """
-    clean_before = strip_markdown_decorations(before_text).replace("\n", " ").strip()
-    clean_after = strip_markdown_decorations(after_text).replace("\n", " ").strip()
-    clean_section = strip_markdown_decorations(section_title).replace("\n", " ").strip()
+    # 1. Check curated prompts for GoAlive heroes
+    is_goalive = (
+        "GoAlive" in story_title
+        or "皮拉诺瓦" in story_title
+        or section_title in [
+            "序章", "虚空崩塌", "机械魔法时代", "我要回家，但是……",
+            "**魔法的共鸣**", "魔法的共鸣", "回家的希望", "神秘之地",
+            "世界尽头的坐标", "重返皮拉诺瓦", "彩蛋：新的危机"
+        ]
+    )
+    if tag_id and is_goalive and tag_id in GO_ALIVE_HEROES_PROMPTS:
+        return GO_ALIVE_HEROES_PROMPTS[tag_id]
 
-    # Determine primary vs secondary
+    # 2. Heuristic Narrative Context Distillation
+    clean_before = clean_narrative_for_visual_prompt(before_text)
+    clean_after = clean_narrative_for_visual_prompt(after_text)
+    clean_sec = strip_markdown_decorations(section_title).replace("\n", " ").strip()
+
     if clean_after and not clean_before:
-        # Just under #title / start of section: only has paragraph after it (1st priority)
         primary = clean_after
         secondary = ""
     elif clean_before and not clean_after:
-        # Last paragraph of the section: only text before it (1st priority)
         primary = clean_before
         secondary = ""
     elif clean_after and clean_before:
-        # In the middle: text after is 1st priority, text before is secondary
         primary = clean_after
         secondary = clean_before
     else:
-        primary = clean_section
+        primary = clean_sec
         secondary = ""
 
-    # Check if narrative is predominantly CJK or English
-    units, cjk_count, word_count = count_story_units(primary + " " + secondary)
+    combined_text = (primary + " " + secondary).strip()
+    units, cjk_count, word_count = count_story_units(combined_text)
     is_cjk = cjk_count >= word_count
 
+    # Resolve Art Style
+    default_style_cjk = (
+        "造型风格：3D定格动画/黏土雕塑质感与厚涂插画结合，造型饱满圆润，质感温润细腻，电影级布光渲染。"
+    )
+    default_style_en = (
+        "Art Style: Stylized 3D storybook diorama, sculpted forms, rich painterly textured brushstrokes, warm cinematic lighting."
+    )
+    applied_style = style_prompt.strip() if style_prompt else (default_style_cjk if is_cjk else default_style_en)
+
     if is_cjk:
-        if tag_type == "video":
-            prompt = f"【{clean_section}】开篇视频画面：{primary}"
-            if secondary:
-                prompt += f"（背景脉络：{secondary}）"
-        else:
-            prompt = f"【{clean_section}】主要画面：{primary}"
-            if secondary:
-                prompt += f"（前情背景：{secondary}）"
+        shot = detect_scene_shot_and_framing(
+            tag_type=tag_type,
+            text=combined_text,
+            section_title=clean_sec,
+            is_chapter_start=(not clean_before)
+        )
+        lighting = detect_scene_lighting(combined_text, clean_sec)
+
+        prompt_body = primary
+        if secondary and len(secondary) > 10 and secondary not in primary:
+            prompt_body = f"{primary}。背景环境：{secondary}"
+
+        prompt_body = prompt_body.rstrip("。，,. ")
+        prompt = f"{shot}：{prompt_body}。光影与氛围：{lighting}。{applied_style}"
     else:
         if tag_type == "video":
-            prompt = f"Video scene for '{clean_section}': {primary}"
-            if secondary:
-                prompt += f" (Context: {secondary})"
+            shot = "Cinematic wide establishing shot, epic panoramic perspective, smooth camera sweep"
         else:
-            prompt = f"[{clean_section}] Main scene: {primary}"
-            if secondary:
-                prompt += f" (Background context: {secondary})"
+            shot = "Cinematic medium action shot, environmental storytelling, detailed focal subjects"
+
+        prompt_body = primary
+        if secondary:
+            prompt_body = f"{primary}. Environment context: {secondary}"
+        prompt_body = prompt_body.rstrip(". ")
+        prompt = f"[{shot}] {prompt_body}. Lighting and atmosphere: cinematic volumetric lighting. {applied_style}"
 
     return prompt
 
@@ -717,22 +968,47 @@ def update_media_tag_prompts(
     markdown_text: str,
     force: bool = False,
     use_ai: bool = False,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    workspace: Optional[StoryWorkspace] = None,
+    characters: Optional[List[Dict[str, Any]]] = None,
+    style_prompt: Optional[str] = None
 ) -> str:
     """
     Examines media tags in markdown text, extracts context surrounding each tag,
-    and updates/enriches the 'prompt' field of the tags.
+    and updates/enriches the 'prompt' field of the tags with rich visual guidance.
     """
     tags = extract_media_tags(markdown_text)
     if not tags:
         return markdown_text
 
     blocks = split_markdown_into_blocks(markdown_text)
-    
-    # Track current section and paragraphs
-    tag_replacements: List[Tuple[str, str]] = []
 
-    # Map tag positions relative to narrative paragraphs
+    # Detect story title from the first H1
+    story_title = ""
+    for b in blocks:
+        if b.block_type == MarkdownBlock.TYPE_H1:
+            story_title = b.content.strip()
+            break
+
+    # Load character knowledge from workspace if available
+    active_characters = characters
+    if active_characters is None and workspace and (workspace.char_ref_dir / "characters.json").exists():
+        try:
+            with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as cf:
+                active_characters = json.load(cf).get("characters", [])
+        except Exception:
+            pass
+
+    # Load style prompt from workspace if available
+    active_style_prompt = style_prompt
+    if active_style_prompt is None and workspace and (workspace.style_ref_dir / "style.json").exists():
+        try:
+            with open(workspace.style_ref_dir / "style.json", "r", encoding="utf-8") as sf:
+                active_style_prompt = json.load(sf).get("style_prompt")
+        except Exception:
+            pass
+
+    tag_replacements: List[Tuple[str, str]] = []
     current_section = ""
     last_para = ""
 
@@ -770,10 +1046,16 @@ def update_media_tag_prompts(
 
                         sec = t.get("section") or t.get("title") or current_section
                         new_prompt = build_prompt(
-                            t.get("type", "image"),
+                            tag_type=t.get("type", "image"),
                             section_title=sec,
                             before_text=last_para,
-                            after_text=next_para
+                            after_text=next_para,
+                            characters=active_characters,
+                            style_prompt=active_style_prompt,
+                            tag_id=t.get("id"),
+                            story_title=story_title,
+                            use_ai=use_ai,
+                            api_key=api_key
                         )
 
                         # AI enrichment if enabled
@@ -781,7 +1063,13 @@ def update_media_tag_prompts(
                             try:
                                 resp = ai_client.models.generate_content(
                                     model="gemini-2.5-flash",
-                                    contents=f"You are a master art director. Enhance this scene description into a vivid visual image generation prompt with art style, lighting, composition and emotional mood: '{new_prompt}'. Keep it to 2 concise sentences."
+                                    contents=(
+                                        "You are a master Art Director for animated feature films and fantasy storybooks. "
+                                        "Transform this narrative scene description into a visually stunning image generation prompt: "
+                                        f"'{new_prompt}'. "
+                                        "Requirements: specify camera framing, characters & physical actions, environment, lighting, and art style. "
+                                        "No quotes, no spoken dialogue, purely visual."
+                                    )
                                 )
                                 if resp and resp.text:
                                     new_prompt = resp.text.strip()
@@ -825,6 +1113,29 @@ def find_gemini_image_script() -> Optional[Path]:
     return None
 
 
+def find_python_for_gemini() -> str:
+    """Find a Python interpreter that has google-genai installed."""
+    # 1. Prefer dedicated virtualenv
+    candidates = [
+        Path(__file__).resolve().parent / ".venv" / "bin" / "python",
+        Path(__file__).resolve().parent.parent / "image-craft" / ".venv" / "bin" / "python",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    # 2. Fall back to current interpreter if importable
+    try:
+        from google import genai  # noqa: F401
+        from google.genai import types  # noqa: F401
+        return sys.executable
+    except ImportError:
+        pass
+
+    return sys.executable
+
+
+
 # ==============================================================================
 # Workspace & Reference Asset Management
 # ==============================================================================
@@ -854,16 +1165,24 @@ class StoryWorkspace:
         if input_file and str(input_file) != "-":
             p = Path(input_file)
             self.input_file: Optional[Path] = p
-            self.stem = p.stem
+            # If the input file is directly inside an existing workspace directory
+            if p.is_file() and ((p.parent / "char-ref").exists() or (p.parent / "style-ref").exists() or (p.parent / "images").exists()):
+                self.stem = p.parent.name
+                self.workspace_dir = p.parent
+            else:
+                raw_stem = p.stem
+                if raw_stem.endswith("-output"):
+                    raw_stem = raw_stem[:-7]
+                self.stem = raw_stem
+                base = Path(base_output_dir)
+                if base.name == self.stem:
+                    self.workspace_dir = base
+                else:
+                    self.workspace_dir = base / self.stem
         else:
             self.input_file = None
             self.stem = "story"
-
-        base = Path(base_output_dir)
-        # Avoid creating nested abc/abc if base already ends with stem
-        if base.name == self.stem:
-            self.workspace_dir = base
-        else:
+            base = Path(base_output_dir)
             self.workspace_dir = base / self.stem
 
         self.images_dir = self.workspace_dir / "images"
@@ -1285,7 +1604,7 @@ def setup_workspace_assets(
                         success = False
                         if gemini_script and gemini_script.exists():
                             cmd = [
-                                sys.executable, str(gemini_script),
+                                find_python_for_gemini(), str(gemini_script),
                                 gen_prompt,
                                 "-o", str(ref_img_path),
                                 "-m", image_model,
@@ -1337,7 +1656,7 @@ def setup_workspace_assets(
                             success = False
                             if gemini_script and gemini_script.exists():
                                 cmd = [
-                                    sys.executable, str(gemini_script),
+                                    find_python_for_gemini(), str(gemini_script),
                                     gen_prompt,
                                     "-o", str(ref_img_path),
                                     "-m", image_model,
@@ -1443,7 +1762,7 @@ def setup_workspace_assets(
                     success = False
                     if gemini_script and gemini_script.exists():
                         cmd = [
-                            sys.executable, str(gemini_script),
+                            find_python_for_gemini(), str(gemini_script),
                             gen_prompt,
                             "-o", str(ref_style_img),
                             "-m", image_model,
@@ -1495,7 +1814,7 @@ def setup_workspace_assets(
                         success = False
                         if gemini_script and gemini_script.exists():
                             cmd = [
-                                sys.executable, str(gemini_script),
+                                find_python_for_gemini(), str(gemini_script),
                                 gen_prompt,
                                 "-o", str(ref_style_img),
                                 "-m", image_model,
@@ -1906,6 +2225,261 @@ def resolve_workspaces_for_target(
     return discovered
 
 
+
+# ==============================================================================
+# Multimodal Reference-Guided Prompt Engine
+# ==============================================================================
+
+def match_characters_for_tag(
+    tag: Dict[str, Any],
+    characters: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Identifies which characters from the workspace character library are involved
+    in the specified media tag, by checking explicit character tags, scene prompt,
+    and narrative context hint.
+    """
+    if not characters:
+        return []
+
+    # 1. Explicit character list on the tag
+    explicit = tag.get("characters")
+    if explicit:
+        if isinstance(explicit, str):
+            explicit = [c.strip() for c in explicit.split(",") if c.strip()]
+        matched = []
+        for ch in characters:
+            cname = ch.get("name", "")
+            if any(ec == cname or ec in cname or cname in ec for ec in explicit):
+                matched.append(ch)
+        if matched:
+            return matched
+
+    # 2. Match from prompt and context hint
+    prompt_text = tag.get("prompt", "") or ""
+    context_text = tag.get("context_hint", "") or ""
+    combined_search_text = f"{prompt_text} {context_text}"
+
+    matched = []
+    for ch in characters:
+        cname = ch.get("name", "")
+        if not cname:
+            continue
+
+        tokens = [cname]
+        if "·" in cname:
+            tokens.extend([part.strip() for part in cname.split("·") if len(part.strip()) >= 2])
+        role = ch.get("role", "")
+        for en_alias in re.findall(r'\b[A-Z][a-z]+\b', role):
+            if len(en_alias) >= 4 and en_alias not in [
+                "Main", "Character", "Protagonist", "Warrior", "Healer", "Wizard", "Adventurer"
+            ]:
+                tokens.append(en_alias)
+
+        if any(tok in combined_search_text for tok in tokens):
+            matched.append(ch)
+
+    return matched
+
+
+def compose_reference_prompt(
+    context_prompt: str,
+    style_prompt: Optional[str] = None,
+    has_style_image: bool = True,
+    character_refs: Optional[List[Dict[str, Any]]] = None,
+    tag_type: str = "image"
+) -> str:
+    """
+    Composes a multimodal reference prompt enforcing strict role separation between
+    reference images (style aesthetics vs character visual identity) and the narrative scene description.
+    Instructs the model to generate a brand-new scene from scratch rather than modifying/inpainting references.
+    """
+    char_refs = character_refs or []
+    sections = []
+
+    # 1. Critical Instruction / Anti-modification role lock
+    sections.append(
+        "[TASK: BRAND-NEW SCENE ILLUSTRATION FROM SCRATCH]\n"
+        "Generate a completely new, original standalone illustration strictly depicting the SCENE DESCRIPTION below.\n"
+        "CRITICAL CONSTRAINTS:\n"
+        "- DO NOT edit, inpaint, crop, or modify the provided reference image(s).\n"
+        "- DO NOT copy the compositions, backgrounds, camera perspectives, or poses from the reference image(s).\n"
+        "- The environment, action, composition, and physical staging must originate 100% from the SCENE DESCRIPTION."
+    )
+
+    # 2. Reference Roles (Style is Image 1, Character(s) are Image 2+)
+    ref_roles = ["[REFERENCE IMAGE ROLES]"]
+    current_img_idx = 1
+    if has_style_image:
+        ref_roles.append(
+            f"- Reference Image {current_img_idx} (Artistic Style Reference):\n"
+            f"  * Adopt ONLY the artistic medium, sculpted/painterly textures, color palette, lighting atmosphere, and visual aesthetic shown in Image {current_img_idx}.\n"
+            f"  * Do NOT copy the specific objects, buildings, or layout of Image {current_img_idx}."
+        )
+        current_img_idx += 1
+
+    for ch in char_refs:
+        cname = ch.get("name", "Character")
+        ref_roles.append(
+            f"- Reference Image {current_img_idx} (Character Identity Reference: {cname}):\n"
+            f"  * Maintain the exact character visual identity, facial features, hairstyle, clothing design, colors, and proportions of {cname} from Image {current_img_idx}.\n"
+            f"  * Place {cname} naturally into this new scene, dynamically adopting the action, pose, and emotion specified in the SCENE DESCRIPTION.\n"
+            f"  * Do NOT replicate the pose, camera framing, or background of Image {current_img_idx}."
+        )
+        current_img_idx += 1
+
+    sections.append("\n".join(ref_roles))
+
+    # 3. Scene description
+    sections.append(f"[SCENE DESCRIPTION & ACTION]\n{context_prompt.strip()}")
+
+    # 4. Optional Character Visual DNA Highlights for extra precision
+    char_dna_items = []
+    for ch in char_refs:
+        cname = ch.get("name", "")
+        cdna = ch.get("visual_dna", "")
+        if cdna:
+            short_dna = cdna.split(".")[0].strip() if "." in cdna else cdna[:140].strip()
+            char_dna_items.append(f"- {cname}: {short_dna}")
+    if char_dna_items:
+        sections.append("[CHARACTER VISUAL DNA HIGHLIGHTS]\n" + "\n".join(char_dna_items))
+
+    # 5. Art style specification
+    if style_prompt and style_prompt.strip():
+        sections.append(f"[ARTISTIC STYLE SPECIFICATION]\n{style_prompt.strip()}")
+
+    return "\n\n".join(sections)
+
+
+def resolve_tag_references(
+    tag: Dict[str, Any],
+    workspace: Optional[StoryWorkspace] = None,
+    characters: Optional[List[Dict[str, Any]]] = None,
+    style_data: Optional[Dict[str, Any]] = None,
+    markdown_path: Optional[Union[str, Path]] = None
+) -> Dict[str, Any]:
+    """
+    Resolves the complete reference context for a media tag:
+    - style reference image and prompt (always attached if available)
+    - matched character reference images and visual DNA (only if context requires them)
+    - the final composed model prompt filled into the strict anti-modification template
+    - the executable CLI command to generate this asset
+    """
+    tag_id = tag.get("id", "")
+    tag_type = tag.get("type", "image")
+    prompt = tag.get("prompt", "")
+
+    # Load characters if not passed
+    all_chars = characters or []
+    if not all_chars and workspace and (workspace.char_ref_dir / "characters.json").exists():
+        try:
+            with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as f:
+                all_chars = json.load(f).get("characters", [])
+        except Exception:
+            pass
+
+    # Load style if not passed
+    active_style = style_data or {}
+    if not active_style and workspace and (workspace.style_ref_dir / "style.json").exists():
+        try:
+            with open(workspace.style_ref_dir / "style.json", "r", encoding="utf-8") as f:
+                active_style = json.load(f)
+        except Exception:
+            pass
+
+    # Resolve Style Reference Image
+    style_img_path = None
+    style_img_name = None
+    if workspace and workspace.style_ref_dir.exists():
+        candidates = sorted(
+            list(workspace.style_ref_dir.glob("*.png")) +
+            list(workspace.style_ref_dir.glob("*.PNG")) +
+            list(workspace.style_ref_dir.glob("*.jpg")) +
+            list(workspace.style_ref_dir.glob("*.jpeg"))
+        )
+        if candidates:
+            style_img_path = candidates[0]
+            style_img_name = style_img_path.name
+
+    style_ref_info = None
+    if style_img_path:
+        style_ref_info = {
+            "name": style_img_name,
+            "path": str(style_img_path),
+            "style_name": active_style.get("style_name", "Default Art Style"),
+            "style_prompt": active_style.get("style_prompt", ""),
+            "role": "Style Reference (Always Active)"
+        }
+
+    # Match Characters
+    matched_chars = match_characters_for_tag(tag, all_chars)
+    char_refs_info = []
+    char_img_paths = []
+
+    for ch in matched_chars:
+        cname = ch.get("name", "")
+        c_img_path = None
+        c_img_name = None
+        if workspace and workspace.char_ref_dir.exists():
+            c_dir = workspace.char_ref_dir / cname
+            if c_dir.exists():
+                c_candidates = sorted(
+                    list(c_dir.glob("*.png")) +
+                    list(c_dir.glob("*.PNG")) +
+                    list(c_dir.glob("*.jpg")) +
+                    list(c_dir.glob("*.jpeg"))
+                )
+                if c_candidates:
+                    c_img_path = c_candidates[0]
+                    c_img_name = c_img_path.name
+
+        if not c_img_path and ch.get("images"):
+            c_img_name = ch["images"][0]
+            if workspace:
+                c_img_path = workspace.char_ref_dir / cname / c_img_name
+
+        if c_img_path and Path(c_img_path).exists():
+            char_img_paths.append(Path(c_img_path))
+
+        char_refs_info.append({
+            "name": cname,
+            "role": ch.get("role", "Character"),
+            "visual_dna": ch.get("visual_dna", ""),
+            "image": c_img_name,
+            "path": str(c_img_path) if c_img_path else "",
+            "role_guide": f"Character Identity Reference: {cname} (Context Matched)"
+        })
+
+    # Compose Final Model Prompt
+    composed = compose_reference_prompt(
+        context_prompt=prompt,
+        style_prompt=active_style.get("style_prompt", ""),
+        has_style_image=style_img_path is not None,
+        character_refs=char_refs_info,
+        tag_type=tag_type
+    )
+
+    # Build reference image paths list for gemini-image.py (-i args)
+    all_ref_image_paths = []
+    if style_img_path and style_img_path.exists():
+        all_ref_image_paths.append(style_img_path)
+    all_ref_image_paths.extend(char_img_paths)
+
+    # Build CLI Command String
+    md_file_arg = str(markdown_path) if markdown_path else f"outputs/{workspace.root_dir.name if hasattr(workspace, 'root_dir') else getattr(workspace, 'stem', 'story')}/{getattr(workspace, 'stem', 'story')}-output.md"
+    cli_command = f"python3 storybook.py media generate {md_file_arg} --id {tag_id}"
+
+    return {
+        "tag_id": tag_id,
+        "type": tag_type,
+        "composed_prompt": composed,
+        "style_ref": style_ref_info,
+        "character_refs": char_refs_info,
+        "ref_image_paths": all_ref_image_paths,
+        "cli_command": cli_command
+    }
+
+
 # ==============================================================================
 # AI Media Asset Generation Engine
 # ==============================================================================
@@ -1915,6 +2489,7 @@ def generate_media_assets(
     output_dir: Union[str, Path] = "outputs",
     media_type: str = "all",
     tag_id: Optional[str] = None,
+    section: Optional[str] = None,
     image_model: str = "gemini-3.1-flash-image",
     video_model: str = "veo-2.0-generate-001",
     aspect_ratio: str = "16:9",
@@ -1954,6 +2529,10 @@ def generate_media_assets(
         t_id = t.get("id", "")
         if tag_id and t_id != tag_id:
             continue
+        if section:
+            sec_val = t.get("section") or t.get("title") or ""
+            if section != sec_val and section not in sec_val:
+                continue
         if type_norm in ["all", "both"] or t_type == type_norm or (type_norm == "image" and t_type == "image") or (type_norm == "video" and t_type == "video"):
             target_tags.append(t)
 
@@ -1974,9 +2553,30 @@ def generate_media_assets(
             except Exception:
                 pass
         if not active_style_image and workspace.style_ref_dir.exists():
-            candidates = sorted(list(workspace.style_ref_dir.glob("*.png")) + list(workspace.style_ref_dir.glob("*.jpg")))
+            candidates = sorted(list(workspace.style_ref_dir.glob("*.png")) + list(workspace.style_ref_dir.glob("*.jpg")) + list(workspace.style_ref_dir.glob("*.PNG")))
             if candidates:
                 active_style_image = str(candidates[0])
+
+    # Load character knowledge from workspace if available
+    workspace_chars = []
+    if workspace and (workspace.char_ref_dir / "characters.json").exists():
+        try:
+            with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as f:
+                c_idx = json.load(f)
+                workspace_chars = c_idx.get("characters", [])
+        except Exception:
+            pass
+
+    # Load workspace generation settings & per-scene overrides if available
+    ws_settings = {}
+    if workspace:
+        settings_file = workspace.workspace_dir / "settings.json"
+        if settings_file.exists():
+            try:
+                with open(settings_file, "r", encoding="utf-8") as sf:
+                    ws_settings = json.load(sf)
+            except Exception:
+                pass
 
     if dry_run:
         print(f"[storybook generate] DRY RUN: Found {len(target_tags)} media tag(s) to generate:")
@@ -1990,6 +2590,19 @@ def generate_media_assets(
             prompt_preview = t.get('prompt', '')[:60]
             engine = "via gemini-image.py" if t.get("type") == "image" else f"via {video_model}"
             print(f"  - [{t.get('type', 'media').upper()}] {t.get('id', '')}: '{prompt_preview}...' -> {target_file} ({engine})")
+            if t.get("type") == "image":
+                ref_info = resolve_tag_references(
+                    tag=t,
+                    workspace=workspace,
+                    characters=workspace_chars,
+                    style_data={"style_name": "Art Style", "style_prompt": active_style_prompt} if active_style_prompt else None
+                )
+                s_ref = ref_info.get("style_ref")
+                c_refs = ref_info.get("character_refs", [])
+                s_name = s_ref["name"] if s_ref else (Path(active_style_image).name if active_style_image else "None")
+                c_names = [c["name"] for c in c_refs]
+                print(f"    Style Reference : {s_name} (Always active)")
+                print(f"    Character Ref(s): {', '.join(c_names) if c_names else 'None (Environment / Establishing)'}")
         return markdown_text, 0
 
     # Validate active_style_image if given
@@ -2009,16 +2622,6 @@ def generate_media_assets(
     except ImportError:
         client = None
 
-    # Load character knowledge from workspace if available
-    workspace_chars = []
-    if workspace and (workspace.char_ref_dir / "characters.json").exists():
-        try:
-            with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as f:
-                c_idx = json.load(f)
-                workspace_chars = c_idx.get("characters", [])
-        except Exception:
-            pass
-
     generated_count = 0
     replacements: List[Tuple[str, str]] = []
 
@@ -2030,32 +2633,49 @@ def generate_media_assets(
         if not prompt:
             prompt = f"Storybook visual for '{sec}'"
 
-        # Apply character visual DNA enhancement if matched
-        effective_prompt = prompt
-        matched_char_dna = []
-        full_context = f"{sec} {prompt} {t.get('context_hint', '')}"
-        for ch in workspace_chars:
-            cname = ch.get("name", "")
-            if cname and cname in full_context:
-                cdna = ch.get("visual_dna", "")
-                if cdna:
-                    matched_char_dna.append(f"{cname} ({cdna})")
-        if matched_char_dna:
-            sep = " " if effective_prompt.endswith((".", "。", "!", "！")) else ". "
-            effective_prompt = f"{effective_prompt}{sep}Character Visual Details: {'; '.join(matched_char_dna)}"
+        # Resolve tag-specific aspect ratio, size, and model with workspace settings and per-scene overrides
+        t_scene_cfg = ws_settings.get("scenes", {}).get(t_id, {}) if ws_settings else {}
+        t_global_cfg = ws_settings.get("global", {}).get(t_type, {}) if ws_settings else {}
 
-        # Apply style prompt modifier if provided
-        if active_style_prompt:
-            sep = " " if effective_prompt.endswith((".", "。", "!", "！")) else ". "
-            effective_prompt = f"{effective_prompt}{sep}Art Style: {active_style_prompt.strip()}"
+        tag_aspect_ratio = t_scene_cfg.get("ratio") or t_global_cfg.get("ratio") or aspect_ratio
+        tag_image_size = t_scene_cfg.get("size") or t_global_cfg.get("size") or image_size
+        tag_image_model = t_scene_cfg.get("model") or t_global_cfg.get("model") or image_model
+        tag_video_model = t_scene_cfg.get("model") or t_global_cfg.get("model") or video_model
+
+        # Resolve references and compose model prompt with strict anti-modification template
+        ref_info = resolve_tag_references(
+            tag=t,
+            workspace=workspace,
+            characters=workspace_chars,
+            style_data={"style_name": "Art Style", "style_prompt": active_style_prompt} if active_style_prompt else None
+        )
+        composed_model_prompt = ref_info["composed_prompt"]
+        all_ref_image_paths = list(ref_info["ref_image_paths"])
+
+        # Override style image if explicitly provided via CLI
+        if active_style_image and Path(active_style_image).exists():
+            resolved_s = Path(active_style_image).resolve()
+            if resolved_s not in [p.resolve() for p in all_ref_image_paths]:
+                all_ref_image_paths.insert(0, resolved_s)
+
+        effective_prompt = composed_model_prompt
 
         if t_type == "image":
             target_file = images_dir / f"{t_id}.png"
             rel_asset = f"images/{t_id}.png" if workspace else str(target_file)
-            print(f"[storybook generate] Generating image for {t_id} with gemini-image.py (model: {image_model})...")
-            print(f"  Prompt: '{effective_prompt}'")
-            if active_style_image:
-                print(f"  Style Image: '{active_style_image}'")
+            # Ensure fresh target on regeneration
+            cand_0_prev = images_dir / f"{t_id}_0.png"
+            for old_p in [target_file, cand_0_prev]:
+                if old_p.exists():
+                    try:
+                        old_p.unlink()
+                    except Exception:
+                        pass
+            print(f"[storybook generate] Generating image for {t_id} with gemini-image.py (model: {tag_image_model}, ratio: {tag_aspect_ratio}, size: {tag_image_size})...")
+            print(f"  Composed Prompt Preview: {composed_model_prompt[:120]}...")
+            if all_ref_image_paths:
+                ref_names = [p.name for p in all_ref_image_paths]
+                print(f"  Attached Reference Images ({len(all_ref_image_paths)}): {', '.join(ref_names)}")
 
             # Primary: Call gemini-image.py tool from image-craft
             gemini_script = find_gemini_image_script()
@@ -2063,16 +2683,16 @@ def generate_media_assets(
 
             if gemini_script and gemini_script.exists():
                 cmd = [
-                    sys.executable,
+                    find_python_for_gemini(),
                     str(gemini_script),
-                    effective_prompt,
+                    composed_model_prompt,
                     "-o", str(target_file),
-                    "-m", image_model,
-                    "-r", aspect_ratio,
-                    "-s", image_size,
+                    "-m", tag_image_model,
+                    "-r", tag_aspect_ratio,
+                    "-s", tag_image_size,
                 ]
-                if active_style_image and Path(active_style_image).exists():
-                    cmd.extend(["-i", str(Path(active_style_image).resolve())])
+                for rp in all_ref_image_paths:
+                    cmd.extend(["-i", str(Path(rp).resolve())])
                 if resolved_key:
                     cmd.extend(["--api-key", resolved_key])
 
@@ -2081,6 +2701,10 @@ def generate_media_assets(
                     if res.returncode != 0:
                         print(f"  Error from gemini-image: {res.stderr.strip()}", file=sys.stderr)
                     else:
+                        if not target_file.exists():
+                            cand_0 = target_file.parent / f"{target_file.stem}_0{target_file.suffix}"
+                            if cand_0.exists():
+                                shutil.copy2(cand_0, target_file)
                         if target_file.exists():
                             image_generated = True
                         else:
@@ -2092,11 +2716,11 @@ def generate_media_assets(
             if not image_generated and client:
                 try:
                     print(f"  Falling back to direct Google GenAI client for {t_id}...")
-                    if "imagen" in image_model.lower():
+                    if "imagen" in tag_image_model.lower():
                         cfg = {"output_mime_type": "image/png"}
-                        if aspect_ratio:
-                            cfg["aspect_ratio"] = aspect_ratio
-                        res = client.models.generate_images(model=image_model, prompt=effective_prompt, config=cfg)
+                        if tag_aspect_ratio:
+                            cfg["aspect_ratio"] = tag_aspect_ratio
+                        res = client.models.generate_images(model=tag_image_model, prompt=composed_model_prompt, config=cfg)
                         if hasattr(res, "generated_images") and res.generated_images:
                             img_bytes = res.generated_images[0].image.image_bytes
                             with open(target_file, "wb") as f:
@@ -2104,29 +2728,30 @@ def generate_media_assets(
                             image_generated = True
                     else:
                         input_payload = []
-                        if active_style_image and Path(active_style_image).exists():
-                            try:
-                                with open(active_style_image, "rb") as sif:
-                                    sb64 = base64.b64encode(sif.read()).decode("utf-8")
-                                mime_t, _ = mimetypes.guess_type(active_style_image)
-                                input_payload.append({
-                                    "type": "image",
-                                    "data": sb64,
-                                    "mime_type": mime_t or "image/png"
-                                })
-                            except Exception:
-                                pass
-                        input_payload.append({"type": "text", "text": effective_prompt})
+                        for rp in all_ref_image_paths:
+                            if Path(rp).exists():
+                                try:
+                                    with open(rp, "rb") as rpf:
+                                        rb64 = base64.b64encode(rpf.read()).decode("utf-8")
+                                    mime_t, _ = mimetypes.guess_type(str(rp))
+                                    input_payload.append({
+                                        "type": "image",
+                                        "data": rb64,
+                                        "mime_type": mime_t or "image/png"
+                                    })
+                                except Exception:
+                                    pass
+                        input_payload.append({"type": "text", "text": composed_model_prompt})
 
                         resp_format = {"type": "image", "mime_type": "image/jpeg"}
-                        if aspect_ratio:
-                            resp_format["aspect_ratio"] = aspect_ratio
-                        if image_size:
-                            resp_format["image_size"] = image_size
+                        if tag_aspect_ratio:
+                            resp_format["aspect_ratio"] = tag_aspect_ratio
+                        if tag_image_size:
+                            resp_format["image_size"] = tag_image_size
 
                         interaction = client.interactions.create(
-                            model=image_model,
-                            input=input_payload if len(input_payload) > 1 else effective_prompt,
+                            model=tag_image_model,
+                            input=input_payload if len(input_payload) > 1 else composed_model_prompt,
                             response_format=resp_format
                         )
                         extracted_bytes = None
@@ -2180,14 +2805,14 @@ def generate_media_assets(
         elif t_type == "video":
             target_file = videos_dir / f"{t_id}.mp4"
             rel_asset = f"videos/{t_id}.mp4" if workspace else str(target_file)
-            print(f"[storybook generate] Requesting video generation for {t_id} with {video_model}...")
+            print(f"[storybook generate] Requesting video generation for {t_id} with {tag_video_model}...")
             print(f"  Prompt: '{effective_prompt}'")
             if active_style_image:
                 print(f"  Style Image: '{active_style_image}'")
             try:
                 # Video generation via Google GenAI Veo
                 video_kwargs = {
-                    "model": video_model,
+                    "model": tag_video_model,
                     "prompt": effective_prompt
                 }
                 if active_style_image and Path(active_style_image).exists():
@@ -2302,9 +2927,12 @@ genre: "{genre or 'General'}"
 class TestStorybook(unittest.TestCase):
 
     def setUp(self):
+        self.old_gemini_key = os.environ.pop("GEMINI_API_KEY", None)
+        self.old_google_key = os.environ.pop("GOOGLE_API_KEY", None)
         self.p1 = "很久很久以前，在群山环抱的一片古老森林里，住着一个名叫小明的年轻冒险家。小明从小就对大自然充满了无限的好奇，他总是喜欢背着自制的小布包，穿梭在郁郁葱葱的林间小道上，寻找那些隐藏在树根和岩石缝隙中的奇妙小生物。"
         self.p2 = "清晨的第一缕阳光穿透薄雾，将金色的光斑洒在潮湿的苔藓上。小明沿着一条熟悉的小溪缓缓向前走去，水流撞击着光滑的鹅卵石，发出悦耳的叮咚声。就在这时，小溪对岸的一道奇异蓝光吸引了他的注意，那是一团漂浮的光芒。"
         self.p3 = "小明小心翼翼地踩着溪流中的垫脚石跨过小溪。走近一看，那竟然是一只通体透明、散发着幽蓝荧光的小精灵。小精灵有着薄如蝉翼的翅膀，正悬停在一朵盛开的七彩野花上方，似乎在焦急地寻找着昨夜暴风雨中遗失的钥匙。"
+
         self.story_md = f"""# 魔法森林历险记
 
 # 第一章 魔法森林
@@ -2321,6 +2949,12 @@ class TestStorybook(unittest.TestCase):
 
 {self.p2}
 """
+
+    def tearDown(self):
+        if self.old_gemini_key:
+            os.environ["GEMINI_API_KEY"] = self.old_gemini_key
+        if self.old_google_key:
+            os.environ["GOOGLE_API_KEY"] = self.old_google_key
 
     def test_cjk_counting(self):
         text = "这是一个用来测试中文字数统计的简单句子。"
@@ -2798,13 +3432,16 @@ def main():
     add_common_media_args(p_m_prompt)
     p_m_prompt.add_argument("--force", action="store_true", help="Overwrite existing tag prompts.")
     p_m_prompt.add_argument("--ai", action="store_true", help="Use Gemini AI to enhance visual prompts.")
+    p_m_prompt.add_argument("--style-prompt", dest="style_prompt", help="Visual art style prompt override.")
     p_m_prompt.add_argument("--api-key", help="Gemini API key.")
 
     # 2.3 media generate
     p_m_gen = media_sub.add_parser("generate", help="Generate AI images/videos for media tags.")
     add_common_media_args(p_m_gen)
     p_m_gen.add_argument("-t", "--type", default="all", choices=["image", "video", "all"], help="Media type to generate (default: all).")
-    p_m_gen.add_argument("--id", dest="tag_id", help="Target specific tag ID (e.g. img_001).")
+    p_m_gen.add_argument("--id", "--tag", dest="tag_id", help="Target specific tag ID (e.g. img_001).")
+    p_m_gen.add_argument("--section", "--chapter", dest="section", help="Target specific section or chapter title (e.g. 序章).")
+    p_m_gen.add_argument("--force", action="store_true", help="Force regeneration of existing media assets.")
     p_m_gen.add_argument("--output-dir", default="outputs", help="Directory to save media assets (default: outputs).")
     p_m_gen.add_argument("-m", "--model", default="gemini-3.1-flash-image", help="Image model (default: gemini-3.1-flash-image).")
     p_m_gen.add_argument("--video-model", default="veo-2.0-generate-001", help="Video model (default: veo-2.0-generate-001).")
@@ -3155,11 +3792,38 @@ def main():
         # Mode: prompt only
         if action == "prompt":
             input_text = read_input_content(args.input_file)
+            workspace = None
+            if args.input_file:
+                p = Path(args.input_file)
+                if (p.parent / "char-ref").exists() or (p.parent / "style-ref").exists():
+                    workspace = StoryWorkspace(p.parent)
+                else:
+                    workspace = StoryWorkspace(args.input_file)
+
+            chars = None
+            s_prompt = getattr(args, "style_prompt", None)
+            if workspace:
+                if (workspace.char_ref_dir / "characters.json").exists():
+                    try:
+                        with open(workspace.char_ref_dir / "characters.json", "r", encoding="utf-8") as cf:
+                            chars = json.load(cf).get("characters", [])
+                    except Exception:
+                        pass
+                if not s_prompt and (workspace.style_ref_dir / "style.json").exists():
+                    try:
+                        with open(workspace.style_ref_dir / "style.json", "r", encoding="utf-8") as sf:
+                            s_prompt = json.load(sf).get("style_prompt")
+                    except Exception:
+                        pass
+
             res = update_media_tag_prompts(
                 markdown_text=input_text,
                 force=args.force,
                 use_ai=args.ai,
-                api_key=args.api_key
+                api_key=args.api_key,
+                workspace=workspace,
+                characters=chars,
+                style_prompt=s_prompt
             )
             write_output_content(res, args.output, args.input_file, args.in_place)
             sys.exit(0)
@@ -3192,6 +3856,7 @@ def main():
                 output_dir=workspace.workspace_dir,
                 media_type=args.type,
                 tag_id=args.tag_id,
+                section=getattr(args, "section", None),
                 image_model=args.model,
                 video_model=args.video_model,
                 aspect_ratio=args.ratio,

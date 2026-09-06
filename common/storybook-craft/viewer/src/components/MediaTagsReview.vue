@@ -141,6 +141,31 @@
       </div>
 
       <div class="toolbar-right">
+        <!-- Add Scene Tag Button -->
+        <button
+          type="button"
+          class="clean-btn clean-btn-sm add-scene-tag-btn"
+          title="Add a new image or video scene tag into this story"
+          @click="emit('open-add-tag')"
+        >
+          <span class="material-symbols-rounded">add_photo_alternate</span>
+          <span>+ Add Scene Tag</span>
+        </button>
+
+        <!-- Auto-Generate / Enrich Prompts -->
+        <button
+          type="button"
+          class="clean-btn clean-btn-sm enrich-prompts-btn"
+          :disabled="isEnrichingPrompts"
+          :title="missingPromptsCount > 0 ? 'Auto-generate prompts for tags that have empty prompts' : 'Enrich / regenerate prompts for all tags'"
+          @click="handleEnrichMissingPrompts"
+        >
+          <span class="material-symbols-rounded" :class="{ 'is-spinning': isEnrichingPrompts }">
+            {{ isEnrichingPrompts ? 'sync' : 'auto_awesome' }}
+          </span>
+          <span>{{ isEnrichingPrompts ? 'Synthesizing...' : (missingPromptsCount > 0 ? `Generate Missing Prompts (${missingPromptsCount})` : '✨ Enrich Prompts') }}</span>
+        </button>
+
         <!-- Copy All Prompts -->
         <button
           type="button"
@@ -221,7 +246,50 @@
           </div>
 
           <div class="tag-status">
-            <span class="status-badge" :class="tag.isGenerated ? 'status-done' : 'status-wait'">
+            <!-- Explicit Regenerate / Generate Scene Button -->
+            <button
+              v-if="tag.isGenerated"
+              type="button"
+              class="clean-btn clean-btn-sm card-regen-btn"
+              :class="{ 'is-loading': isTagGenerating(stem, tag.id) }"
+              :disabled="isTagGenerating(stem, tag.id)"
+              title="Regenerate this scene via Gemini"
+              @click.stop="handleDirectGenerate(tag)"
+            >
+              <span class="material-symbols-rounded" :class="{ 'is-spinning': isTagGenerating(stem, tag.id) }">
+                {{ isTagGenerating(stem, tag.id) ? 'sync' : 'refresh' }}
+              </span>
+              <span>{{ isTagGenerating(stem, tag.id) ? 'Generating...' : 'Regenerate' }}</span>
+            </button>
+            <button
+              v-else
+              type="button"
+              class="clean-btn clean-btn-sm card-gen-btn"
+              :class="{ 'is-loading': isTagGenerating(stem, tag.id) }"
+              :disabled="isTagGenerating(stem, tag.id)"
+              title="Generate this scene via Gemini"
+              @click.stop="handleDirectGenerate(tag)"
+            >
+              <span class="material-symbols-rounded" :class="{ 'is-spinning': isTagGenerating(stem, tag.id) }">
+                {{ isTagGenerating(stem, tag.id) ? 'sync' : 'auto_awesome' }}
+              </span>
+              <span>{{ isTagGenerating(stem, tag.id) ? 'Generating...' : 'Generate' }}</span>
+            </button>
+
+            <button
+              type="button"
+              class="clean-btn clean-btn-sm card-inspect-btn"
+              title="Inspect prompt template, style ref & character ref"
+              @click="previewAsset(tag)"
+            >
+              <span class="material-symbols-rounded">tune</span>
+              Inspect
+            </button>
+            <span v-if="isTagGenerating(stem, tag.id)" class="status-badge status-generating">
+              <span class="material-symbols-rounded is-spinning">sync</span>
+              Generating...
+            </span>
+            <span v-else class="status-badge" :class="tag.isGenerated ? 'status-done' : 'status-wait'">
               <span class="material-symbols-rounded">
                 {{ tag.isGenerated ? 'check' : 'schedule' }}
               </span>
@@ -246,6 +314,23 @@
             </button>
           </div>
           <p class="prompt-text">{{ tag.prompt || 'No prompt specified in tag.' }}</p>
+        </div>
+
+        <!-- References Strip: Style Reference + Character Reference(s) -->
+        <div v-if="tag.style_ref || (tag.character_refs && tag.character_refs.length)" class="card-refs-strip" @click="previewAsset(tag)">
+          <span class="refs-strip-label">References:</span>
+          <div v-if="tag.style_ref" class="ref-mini-chip style-chip" title="Always active style guide">
+            <img v-if="tag.style_ref.assetUrl" :src="tag.style_ref.assetUrl" class="mini-ref-img" />
+            <span class="mini-ref-name">Style: {{ tag.style_ref.style_name }}</span>
+          </div>
+          <div v-for="c in (tag.character_refs || [])" :key="c.name" class="ref-mini-chip char-chip" title="Context-matched character reference">
+            <img v-if="c.assetUrl" :src="c.assetUrl" class="mini-ref-img" />
+            <span class="mini-ref-name">{{ c.name }}</span>
+          </div>
+          <span class="inspect-click-hint">
+            <span class="material-symbols-rounded">visibility</span>
+            View Model Prompt
+          </span>
         </div>
 
         <!-- Context Hint (Story Context) -->
@@ -329,7 +414,11 @@
               </div>
             </td>
             <td>
-              <span class="status-badge" :class="tag.isGenerated ? 'status-done' : 'status-wait'">
+              <span v-if="isTagGenerating(stem, tag.id)" class="status-badge status-generating">
+                <span class="material-symbols-rounded is-spinning">sync</span>
+                Generating
+              </span>
+              <span v-else class="status-badge" :class="tag.isGenerated ? 'status-done' : 'status-wait'">
                 <span class="material-symbols-rounded">
                   {{ tag.isGenerated ? 'check' : 'schedule' }}
                 </span>
@@ -352,16 +441,38 @@
               <span v-else class="table-no-asset">-</span>
             </td>
             <td style="text-align: center;">
-              <button
-                type="button"
-                class="clean-icon-btn copy-icon-btn"
-                title="Copy prompt"
-                @click="copyPrompt(tag.prompt, tag.id || idx)"
-              >
-                <span class="material-symbols-rounded">
-                  {{ copiedId === (tag.id || idx) ? 'check' : 'content_copy' }}
-                </span>
-              </button>
+              <div class="table-actions-cell">
+                <button
+                  type="button"
+                  class="clean-icon-btn gen-icon-btn"
+                  :class="[tag.isGenerated ? 'regen' : 'gen', { 'is-loading': isTagGenerating(stem, tag.id) }]"
+                  :disabled="isTagGenerating(stem, tag.id)"
+                  :title="isTagGenerating(stem, tag.id) ? 'Generating...' : (tag.isGenerated ? 'Regenerate this scene' : 'Generate this scene')"
+                  @click.stop="handleDirectGenerate(tag)"
+                >
+                  <span class="material-symbols-rounded" :class="{ 'is-spinning': isTagGenerating(stem, tag.id) }">
+                    {{ isTagGenerating(stem, tag.id) ? 'sync' : (tag.isGenerated ? 'refresh' : 'auto_awesome') }}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="clean-icon-btn copy-icon-btn"
+                  title="Inspect prompt template & reference guides"
+                  @click="previewAsset(tag)"
+                >
+                  <span class="material-symbols-rounded">tune</span>
+                </button>
+                <button
+                  type="button"
+                  class="clean-icon-btn copy-icon-btn"
+                  title="Copy prompt"
+                  @click="copyPrompt(tag.prompt, tag.id || idx)"
+                >
+                  <span class="material-symbols-rounded">
+                    {{ copiedId === (tag.id || idx) ? 'check' : 'content_copy' }}
+                  </span>
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -372,6 +483,7 @@
 
 <script setup>
 import { ref, computed } from 'vue';
+import { isTagGenerating, runTagGeneration, enrichPrompts } from '../services/api';
 
 const props = defineProps({
   stem: {
@@ -392,7 +504,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['preview']);
+const emit = defineEmits(['preview', 'refresh', 'open-add-tag']);
 
 const searchQuery = ref('');
 const filterType = ref('all'); // 'all' | 'image' | 'video'
@@ -401,6 +513,25 @@ const selectedSection = ref('');
 const viewMode = ref('cards'); // 'cards' | 'table'
 const copiedId = ref(null);
 const allCopied = ref(false);
+const isEnrichingPrompts = ref(false);
+
+const missingPromptsCount = computed(() => {
+  return (props.tags || []).filter(t => !t.prompt || !t.prompt.trim()).length;
+});
+
+async function handleEnrichMissingPrompts() {
+  if (isEnrichingPrompts.value) return;
+  isEnrichingPrompts.value = true;
+  try {
+    const force = missingPromptsCount.value === 0;
+    await enrichPrompts(props.stem, { force });
+    emit('refresh');
+  } catch (err) {
+    alert(`Failed to enrich prompts: ${err.message}`);
+  } finally {
+    isEnrichingPrompts.value = false;
+  }
+}
 
 const imageTagsCount = computed(() => {
   return props.tags.filter(t => t.type !== 'video').length;
@@ -475,20 +606,46 @@ function resetFilters() {
   selectedSection.value = '';
 }
 
-function previewAsset(tag) {
-  if (!tag.matchedAsset) return;
+async function handleDirectGenerate(tag) {
+  if (isTagGenerating(props.stem, tag.id)) return;
+  try {
+    await runTagGeneration(props.stem, {
+      tagId: tag.id,
+      section: tag.section,
+      type: tag.type || 'image'
+    });
+  } catch (err) {
+    console.error('Direct generation failed:', err);
+  }
+}
+
+function triggerTagAction(tag, autoGenerate = false) {
   emit('preview', {
-    src: tag.matchedAsset.assetUrl,
-    title: tag.id || 'Scene Asset',
+    src: tag.matchedAsset ? tag.matchedAsset.assetUrl : '',
+    title: `[${(tag.type || 'image').toUpperCase()}] ${tag.id || 'Scene'}${tag.section ? ' - ' + tag.section : ''}`,
     type: tag.type || 'image',
+    id: tag.id,
+    tagId: tag.id,
+    stem: props.stem,
+    section: tag.section,
     prompt: tag.prompt || '',
+    composedPrompt: tag.composed_prompt || '',
+    styleRef: tag.style_ref || null,
+    characterRefs: tag.character_refs || [],
+    cliCommand: tag.cli_command || '',
+    autoGenerate,
     details: {
       TagID: tag.id,
-      Type: tag.type,
-      Section: tag.section,
-      File: tag.matchedAsset.name
+      Type: tag.type === 'video' ? 'Video Scene' : 'Image Scene',
+      Section: tag.section || 'N/A',
+      Status: tag.isGenerated ? 'Generated' : 'Pending',
+      File: tag.matchedAsset ? tag.matchedAsset.name : 'Pending generation'
     }
   });
+}
+
+function previewAsset(tag) {
+  triggerTagAction(tag, false);
 }
 
 async function copyPrompt(prompt, id) {
@@ -720,6 +877,47 @@ async function copyAllPrompts() {
   gap: 0.6rem;
 }
 
+.add-scene-tag-btn {
+  background: var(--primary, #6750a4);
+  color: #ffffff;
+  font-weight: 600;
+  gap: 0.35rem;
+  border-radius: 9999px;
+  padding: 0.35rem 0.85rem;
+  box-shadow: 0 2px 6px rgba(103, 80, 164, 0.25);
+  transition: all 0.2s ease;
+}
+
+.add-scene-tag-btn:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(103, 80, 164, 0.35);
+}
+
+.add-scene-tag-btn .material-symbols-rounded {
+  font-size: 1.1rem;
+}
+
+.enrich-prompts-btn {
+  background: var(--primary-container, rgba(103, 80, 164, 0.12));
+  color: var(--primary-on-container, var(--primary));
+  font-weight: 600;
+  gap: 0.35rem;
+  border-radius: 9999px;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid rgba(103, 80, 164, 0.25);
+  transition: all 0.2s ease;
+}
+
+.enrich-prompts-btn:hover:not(:disabled) {
+  background: var(--primary, #6750a4);
+  color: #ffffff;
+}
+
+.enrich-prompts-btn .material-symbols-rounded {
+  font-size: 1.1rem;
+}
+
 .view-switch {
   display: flex;
   background: var(--bg-surface-secondary);
@@ -837,6 +1035,56 @@ async function copyAllPrompts() {
   text-overflow: ellipsis;
 }
 
+.card-regen-btn {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #1d4ed8;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.card-regen-btn:hover {
+  background: #1d4ed8;
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.card-gen-btn {
+  background: #059669;
+  color: #ffffff;
+  border-color: #047857;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.card-gen-btn:hover {
+  background: #047857;
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.clean-icon-btn.gen-icon-btn.regen {
+  color: #2563eb;
+}
+
+.clean-icon-btn.gen-icon-btn.regen:hover {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
+.clean-icon-btn.gen-icon-btn.gen {
+  color: #059669;
+}
+
+.clean-icon-btn.gen-icon-btn.gen:hover {
+  background: rgba(5, 150, 105, 0.1);
+  color: #047857;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -861,6 +1109,21 @@ async function copyAllPrompts() {
   background: var(--status-pending-bg);
   color: var(--status-pending-text);
   border: 1px solid var(--status-pending-border);
+}
+
+.status-generating {
+  background: rgba(14, 165, 233, 0.12);
+  color: var(--accent-primary);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+}
+
+.is-spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Prompt Box */
@@ -1091,6 +1354,104 @@ async function copyAllPrompts() {
 }
 .copy-icon-btn .material-symbols-rounded {
   font-size: 15px;
+}
+
+.card-inspect-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+}
+
+.card-inspect-btn .material-symbols-rounded {
+  font-size: 14px;
+}
+
+.card-inspect-btn:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.card-refs-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-wrap: wrap;
+  transition: all 0.15s ease;
+}
+
+.card-refs-strip:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--accent-primary);
+}
+
+.refs-strip-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ref-mini-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.style-chip {
+  background: rgba(14, 165, 233, 0.1);
+  color: #0284c7;
+  border: 1px solid rgba(14, 165, 233, 0.2);
+}
+
+.char-chip {
+  background: rgba(168, 85, 247, 0.1);
+  color: #9333ea;
+  border: 1px solid rgba(168, 85, 247, 0.2);
+}
+
+.mini-ref-img {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.mini-ref-name {
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inspect-click-hint {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+
+.inspect-click-hint .material-symbols-rounded {
+  font-size: 13px;
+}
+
+.table-actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
 }
 
 .empty-state {

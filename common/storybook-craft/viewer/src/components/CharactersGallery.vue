@@ -148,7 +148,19 @@
 
           <!-- 3. Reference Portraits Gallery -->
           <div class="photos-section">
-            <span class="photos-label">All Reference Photos ({{ char.images?.length || 0 }})</span>
+            <div class="photos-section-header">
+              <span class="photos-label">All Reference Photos ({{ char.images?.length || 0 }})</span>
+              <label class="clean-btn clean-btn-xs upload-photo-btn">
+                <span class="material-symbols-rounded">add_photo_alternate</span>
+                <span>Upload / Replace</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  class="sr-only"
+                  @change="e => onUploadPhoto(e, char.name)"
+                />
+              </label>
+            </div>
             <div v-if="char.images && char.images.length" class="photos-grid">
               <div
                 v-for="img in char.images"
@@ -162,6 +174,14 @@
                   class="photo-img"
                   loading="lazy"
                 />
+                <button
+                  type="button"
+                  class="photo-trash-btn"
+                  title="Delete reference photo"
+                  @click.stop="onDeletePhoto(char.name, img)"
+                >
+                  <span class="material-symbols-rounded">delete</span>
+                </button>
                 <span class="photo-name">{{ img }}</span>
               </div>
             </div>
@@ -178,7 +198,7 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { getCharImageUrl } from '../services/api';
+import { getCharImageUrl, uploadReferenceImage, deleteReferenceImage } from '../services/api';
 
 const props = defineProps({
   stem: {
@@ -191,7 +211,45 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['preview']);
+const emit = defineEmits(['preview', 'refresh']);
+
+async function onUploadPhoto(event, charName) {
+  const file = event.target.files?.[0];
+  if (!file || !props.stem) return;
+
+  try {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      await uploadReferenceImage(props.stem, {
+        type: 'character',
+        characterName: charName,
+        filename: file.name,
+        imageBase64: dataUrl
+      });
+      emit('refresh');
+    };
+    reader.readAsDataURL(file);
+  } catch (err) {
+    console.error('Failed to upload character photo:', err);
+    alert(`Failed to upload photo: ${err.message}`);
+  }
+}
+
+async function onDeletePhoto(charName, imgName) {
+  if (!confirm(`Are you sure you want to delete reference photo "${imgName}" for ${charName}?`)) return;
+  try {
+    await deleteReferenceImage(props.stem, {
+      type: 'character',
+      characterName: charName,
+      filename: imgName
+    });
+    emit('refresh');
+  } catch (err) {
+    console.error('Failed to delete character photo:', err);
+    alert(`Failed to delete photo: ${err.message}`);
+  }
+}
 
 const copiedName = ref(null);
 const expandedMap = ref({});
@@ -330,7 +388,7 @@ async function copyPrompt(prompt, name) {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center top;
+  object-position: center 25%;
   display: block;
   transition: transform 0.3s ease;
 }
@@ -358,14 +416,14 @@ async function copyPrompt(prompt, name) {
   inset: 0;
   background: linear-gradient(
     to top,
-    rgba(0, 0, 0, 0.88) 0%,
-    rgba(0, 0, 0, 0.55) 40%,
-    rgba(0, 0, 0, 0.1) 75%,
+    rgba(15, 23, 42, 0.92) 0%,
+    rgba(15, 23, 42, 0.55) 45%,
+    rgba(15, 23, 42, 0.1) 75%,
     transparent 100%
   );
   display: flex;
   align-items: flex-end;
-  padding: 1.25rem 1.4rem;
+  padding: 1rem 1.25rem;
   pointer-events: none;
 }
 
@@ -377,11 +435,11 @@ async function copyPrompt(prompt, name) {
 
 .char-banner-name {
   margin: 0;
-  font-size: 1.6rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: #ffffff;
   letter-spacing: -0.01em;
-  line-height: 1.2;
+  line-height: 1.3;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.75);
 }
 
@@ -581,11 +639,43 @@ async function copyPrompt(prompt, name) {
   gap: 0.5rem;
 }
 
+.photos-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .photos-label {
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.upload-photo-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.upload-photo-btn .material-symbols-rounded {
+  font-size: 14px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .photos-grid {
@@ -629,6 +719,40 @@ async function copyPrompt(prompt, name) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.photo-trash-btn {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(254, 242, 242, 0.95);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  z-index: 2;
+  padding: 0;
+}
+
+.photo-wrap:hover .photo-trash-btn {
+  opacity: 1;
+}
+
+.photo-trash-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+  transform: scale(1.1);
+}
+
+.photo-trash-btn .material-symbols-rounded {
+  font-size: 14px;
 }
 
 .no-photos-box {

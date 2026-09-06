@@ -44,6 +44,16 @@
 
         <button
           type="button"
+          class="clean-btn clean-btn-sm add-scene-toolbar-btn"
+          title="Add a new image/video scene tag into the story"
+          @click="emit('open-add-tag')"
+        >
+          <span class="material-symbols-rounded">add_photo_alternate</span>
+          <span>+ Add Scene Tag</span>
+        </button>
+
+        <button
+          type="button"
           class="clean-btn clean-btn-sm"
           @click="showRaw = !showRaw"
         >
@@ -52,6 +62,16 @@
           </span>
           {{ showRaw ? 'Story View' : 'Raw Markdown' }}
         </button>
+      </div>
+    </div>
+
+    <!-- Reader Guidance Hint Banner -->
+    <div class="reader-hint-banner clean-card">
+      <div class="hint-left">
+        <span class="material-symbols-rounded hint-icon">tips_and_updates</span>
+        <span>
+          <strong>Scene Tag Tips:</strong> Hover between any two paragraphs in the story to insert an inline scene tag (<strong>+ Add Scene Tag Here</strong>), or click <strong>+ Add Scene Tag</strong> in the toolbar.
+        </span>
       </div>
     </div>
 
@@ -91,6 +111,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { marked } from 'marked';
+import { isTagGenerating, runTagGeneration } from '../services/api';
 import '../styles/markdown.css';
 
 const props = defineProps({
@@ -120,7 +141,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['preview']);
+const emit = defineEmits(['preview', 'refresh', 'open-add-tag']);
 
 const showRaw = ref(false);
 const rawCopied = ref(false);
@@ -140,25 +161,32 @@ const renderedHtml = computed(() => {
 
   let text = props.markdownContent;
 
-  // 1. Fix bold rendering in CJK text:
+  // 1. Strip duplicate markdown image links immediately following a storybook-media tag.
+  // MUST RUN FIRST before any link rewriting so raw relative links like ![alt](images/xxx.png) are caught and stripped!
+  text = text.replace(/(<!--\s*storybook-media(?::\s*\{.*?\}|\s+[^>]*?)\s*-->)(?:\s*!\[[^\]]*\]\([^)]+\))+/gs, '$1');
+
+  // 2. Fix bold rendering in CJK text:
   // Convert **bold** and __bold__ to <strong> tags so marked/CommonMark delimiter rules
   // don't fail when asterisks are adjacent to CJK characters or punctuation marks (e.g. **“皮拉诺瓦”（Pyranova）**)
   text = text.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
 
-  // 2. Replace relative image markdown links: ![alt](images/xxx.png)
+  // 3. Replace relative image markdown links: ![alt](images/xxx.png)
   text = text.replace(/!\[([^\]]*)\]\((images\/[^)]+)\)/g, (match, alt, rel) => {
     return `![${alt}](/api/asset/${encodeURIComponent(props.stem)}/${rel})`;
   });
 
-  // 3. Replace relative video markdown links: ![alt](videos/xxx.mp4)
+  // 4. Replace relative video markdown links: ![alt](videos/xxx.mp4)
   text = text.replace(/!\[([^\]]*)\]\((videos\/[^)]+)\)/g, (match, alt, rel) => {
     const videoUrl = `/api/asset/${encodeURIComponent(props.stem)}/${rel}`;
     return `<div class="story-video-wrap"><video src="${videoUrl}" controls preload="metadata"></video><p class="story-media-caption">${alt}</p></div>`;
   });
 
-  // 4. Process storybook-media tags into clean placeholders or generated embeds
-  // Matches both JSON format <!-- storybook-media: { ... } --> and KV format <!-- storybook-media type="..." ... -->
+  // 5. Extract storybook-media tags into clean unique slot tokens before running marked.parse.
+  // This completely prevents marked from escaping HTML, breaking indentation, or wrapping cards in <pre><code>!
+  const mediaSlots = {};
+  let slotCounter = 0;
+
   text = text.replace(/<!--\s*storybook-media(?::\s*(\{.*?\})|\s+([^>]*?))\s*-->/gs, (match, jsonStr, kvStr) => {
     try {
       let tagData = {};
@@ -177,6 +205,8 @@ const renderedHtml = computed(() => {
       const tagSection = tagData.section || tagData.title || '';
       const tagPrompt = tagData.prompt || tagData.description || '';
 
+      const enriched = props.tags.find(t => t.id === tagId);
+
       // Check if generated image/video exists in workspace
       let matched = null;
       if (tagType === 'video') {
@@ -186,99 +216,163 @@ const renderedHtml = computed(() => {
       }
 
       const isGenerated = !!matched;
+      const isGeneratingTag = isTagGenerating(props.stem, tagId);
+
+      // Character chips if characters are matched
+      const charChipsHtml = (enriched?.character_refs || []).map(c =>
+        `<span class="char-chip"><span class="material-symbols-rounded">face</span>${c.name}</span>`
+      ).join(' ');
+
+      let cardHtml = '';
 
       if (isGenerated) {
-        // If generated asset exists: show embedded visual card with media and clean header
+        // Embedded visual card with media, prominent Regenerate Scene button, and inspect button
         const mediaHtml = tagType === 'video'
-          ? `<video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata"></video>`
-          : `<img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" />`;
+          ? `<video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata" data-tag-id="${tagId}"></video>`
+          : `<img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-tag-id="${tagId}" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" />`;
 
-        return `\n\n<div class="embedded-scene-card type-${tagType}" data-tag-id="${tagId}">
+        cardHtml = `<div class="embedded-scene-card type-${tagType}" data-tag-id="${tagId}">
   <div class="scene-top-bar">
-    <div class="scene-top-left">
-      <span class="type-pill ${tagType}">
-        <span class="material-symbols-rounded">${tagType === 'video' ? 'videocam' : 'image'}</span>
-        ${tagType === 'video' ? 'Video' : 'Image'}
-      </span>
-      <span class="scene-id">${tagId}</span>
-      ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+    <div class="scene-top-row">
+      <div class="scene-top-left">
+        <span class="type-pill ${tagType}">
+          <span class="material-symbols-rounded">${tagType === 'video' ? 'videocam' : 'image'}</span>
+          ${tagType === 'video' ? 'Video' : 'Image'}
+        </span>
+        <span class="scene-id">${tagId}</span>
+        ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+      </div>
+      <div class="scene-top-right">
+        <button type="button" class="scene-action-btn regen-btn" data-tag-id="${tagId}" data-action="regenerate" ${isGeneratingTag ? 'disabled' : ''} title="${isGeneratingTag ? 'Generating in background...' : 'Regenerate this scene via Gemini'}">
+          <span class="material-symbols-rounded ${isGeneratingTag ? 'is-spinning' : ''}">${isGeneratingTag ? 'sync' : 'refresh'}</span>
+          <span>${isGeneratingTag ? 'Generating...' : 'Regenerate Scene'}</span>
+        </button>
+        <button type="button" class="inspect-tag-btn" data-tag-id="${tagId}" data-action="inspect" title="Inspect prompt & references">
+          <span class="material-symbols-rounded">tune</span>
+          <span>Prompt & Refs</span>
+        </button>
+        <span class="status-badge ${isGeneratingTag ? 'status-generating' : 'status-done'}">
+          <span class="material-symbols-rounded ${isGeneratingTag ? 'is-spinning' : ''}">${isGeneratingTag ? 'sync' : 'check'}</span>
+          ${isGeneratingTag ? 'Generating...' : 'Generated'}
+        </span>
+      </div>
     </div>
-    <span class="status-badge status-done">
-      <span class="material-symbols-rounded">check</span>
-      Generated
-    </span>
+    ${charChipsHtml ? `
+    <div class="scene-chars-strip">
+      <span class="chars-strip-label"><span class="material-symbols-rounded">face</span>Characters:</span>
+      <div class="chars-strip-list">${charChipsHtml}</div>
+    </div>` : ''}
   </div>
   <div class="scene-media-box">
     ${mediaHtml}
   </div>
-</div>\n\n`;
+</div>`;
       } else {
-        // When pending: render as a clean, compact placeholder with critical info (type, id, section, status)
-        // without cluttering the reading flow with raw prompt text. Clicking placeholder allows inspecting the prompt.
+        // Clean, compact placeholder with Generate Scene button and inspect button
         const typeLabel = tagType === 'video' ? 'Video' : 'Image';
         const typeIcon = tagType === 'video' ? 'videocam' : 'image';
 
-        return `\n\n<div class="story-scene-placeholder type-${tagType}"
+        cardHtml = `<div class="story-scene-placeholder type-${tagType}"
      data-tag-id="${tagId}"
      data-tag-type="${tagType}"
      data-tag-section="${tagSection}"
      data-prompt="${encodeURIComponent(tagPrompt)}"
      data-status="Pending"
-     title="Click to inspect scene prompt">
-  <div class="placeholder-main">
-    <span class="type-pill ${tagType}">
-      <span class="material-symbols-rounded">${typeIcon}</span>
-      ${typeLabel}
-    </span>
-    <span class="scene-id">${tagId}</span>
-    ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+     title="Click to inspect scene prompt & reference guides">
+  <div class="placeholder-top-row">
+    <div class="scene-meta-group">
+      <span class="type-pill ${tagType}">
+        <span class="material-symbols-rounded">${typeIcon}</span>
+        ${typeLabel}
+      </span>
+      <span class="scene-id">${tagId}</span>
+      ${tagSection ? `<span class="scene-section">${tagSection}</span>` : ''}
+    </div>
+    <div class="placeholder-side">
+      <button type="button" class="scene-action-btn gen-btn" data-tag-id="${tagId}" data-action="generate" ${isGeneratingTag ? 'disabled' : ''} title="${isGeneratingTag ? 'Generating in background...' : 'Generate this scene via Gemini'}">
+        <span class="material-symbols-rounded ${isGeneratingTag ? 'is-spinning' : ''}">${isGeneratingTag ? 'sync' : 'auto_awesome'}</span>
+        <span>${isGeneratingTag ? 'Generating...' : 'Generate Scene'}</span>
+      </button>
+      <button type="button" class="inspect-tag-btn" data-tag-id="${tagId}" data-action="inspect">
+        <span class="material-symbols-rounded">tune</span>
+        <span>Prompt & Refs</span>
+      </button>
+      <span class="status-badge ${isGeneratingTag ? 'status-generating' : 'status-wait'}">
+        <span class="material-symbols-rounded ${isGeneratingTag ? 'is-spinning' : ''}">${isGeneratingTag ? 'sync' : 'schedule'}</span>
+        ${isGeneratingTag ? 'Generating...' : 'Pending'}
+      </span>
+    </div>
   </div>
-  <div class="placeholder-side">
-    <span class="status-badge status-wait">
-      <span class="material-symbols-rounded">schedule</span>
-      Pending
-    </span>
-  </div>
-</div>\n\n`;
+  ${charChipsHtml ? `
+  <div class="scene-chars-strip">
+    <span class="chars-strip-label"><span class="material-symbols-rounded">face</span>Characters:</span>
+    <div class="chars-strip-list">${charChipsHtml}</div>
+  </div>` : ''}
+</div>`;
       }
+
+      const slotToken = `%%STORYBOOK_MEDIA_SLOT_${slotCounter++}%%`;
+      mediaSlots[slotToken] = cardHtml;
+      return `\n\n${slotToken}\n\n`;
     } catch (e) {
       return match;
     }
   });
 
-  return marked.parse(text);
+  // Parse markdown into HTML safely
+  let html = marked.parse(text);
+
+  // Substitute media slots back into HTML
+  for (const [token, cardHtml] of Object.entries(mediaSlots)) {
+    html = html.replace(`<p>${token}</p>`, cardHtml).replace(token, cardHtml);
+  }
+
+  // Add sleek hover insertion zones after narrative paragraphs
+  html = html.replace(/<\/p>/g, '</p><div class="para-insert-zone"><button type="button" class="para-insert-btn" data-action="insert-tag-here" title="Insert new image/video scene tag here"><span class="material-symbols-rounded">add</span><span>+ Add Scene Tag Here</span></button></div>');
+
+  return html;
 });
 
 function handleContentClick(event) {
-  // 1. Clicked on an image to preview
-  const imgTarget = event.target.closest('img');
-  if (imgTarget) {
-    const src = imgTarget.getAttribute('src');
-    const alt = imgTarget.getAttribute('alt') || 'Scene Illustration';
-    const prompt = imgTarget.dataset.prompt ? decodeURIComponent(imgTarget.dataset.prompt) : '';
-    const title = imgTarget.dataset.title || alt;
+  // 0. Clicked on insert scene tag trigger between paragraphs
+  const insertBtn = event.target.closest('[data-action="insert-tag-here"]');
+  if (insertBtn) {
+    const zone = insertBtn.closest('.para-insert-zone');
+    const prevP = zone?.previousElementSibling;
+    const nextP = zone?.nextElementSibling;
+    const beforeText = prevP?.innerText?.trim() || '';
+    const afterText = nextP?.innerText?.trim() || '';
 
-    emit('preview', {
-      src,
-      title,
-      type: 'image',
-      prompt,
-      details: {
-        Workspace: props.stem,
-        Context: 'Story Reader'
+    let section = '';
+    let el = zone?.previousElementSibling;
+    while (el) {
+      if (/^H[1-6]$/i.test(el.tagName)) {
+        section = el.innerText.trim();
+        break;
       }
+      el = el.previousElementSibling;
+    }
+
+    emit('open-add-tag', {
+      section,
+      beforeText,
+      afterText
     });
     return;
   }
 
-  // 2. Clicked on a scene placeholder to inspect critical info and prompt
-  const placeholderTarget = event.target.closest('.story-scene-placeholder');
-  if (placeholderTarget) {
-    const tagId = placeholderTarget.dataset.tagId || '';
-    const tagType = placeholderTarget.dataset.tagType || 'image';
-    const tagSection = placeholderTarget.dataset.tagSection || '';
-    const prompt = placeholderTarget.dataset.prompt ? decodeURIComponent(placeholderTarget.dataset.prompt) : '';
-    const status = placeholderTarget.dataset.status || 'Pending';
+  // 1. Clicked on any element with data-tag-id (placeholder, card, inspect button, action button, embedded media)
+  const tagTarget = event.target.closest('[data-tag-id]');
+  if (tagTarget) {
+    const actionTarget = event.target.closest('[data-action]');
+    const isAutoGenerate = actionTarget && (actionTarget.dataset.action === 'regenerate' || actionTarget.dataset.action === 'generate');
+
+    const tagId = tagTarget.dataset.tagId;
+    const enriched = props.tags.find(t => t.id === tagId);
+
+    const tagType = (enriched?.type || tagTarget.dataset.tagType || 'image').toLowerCase();
+    const tagSection = enriched?.section || tagTarget.dataset.tagSection || '';
+    const tagPrompt = enriched?.prompt || (tagTarget.dataset.prompt ? decodeURIComponent(tagTarget.dataset.prompt) : '');
 
     let matched = null;
     if (tagType === 'video') {
@@ -287,17 +381,51 @@ function handleContentClick(event) {
       matched = props.images.find(img => img.id === tagId || img.name.startsWith(tagId + '.') || img.name.includes(tagId));
     }
 
+    // Direct inline button action (Generate Scene or Regenerate Scene)
+    if (isAutoGenerate) {
+      runTagGeneration(props.stem, { tagId, section: tagSection, type: tagType });
+      return;
+    }
+
+    // Clicking "Prompt & Refs" or clicking the card/media opens the Lightbox inspector
     emit('preview', {
       src: matched ? matched.assetUrl : '',
       title: `[${tagType.toUpperCase()}] ${tagId}${tagSection ? ' - ' + tagSection : ''}`,
       type: tagType,
-      prompt,
+      id: tagId,
+      tagId: tagId,
+      stem: props.stem,
+      section: tagSection,
+      prompt: tagPrompt,
+      composedPrompt: enriched?.composed_prompt || '',
+      styleRef: enriched?.style_ref || null,
+      characterRefs: enriched?.character_refs || [],
+      cliCommand: enriched?.cli_command || '',
+      autoGenerate: false,
       details: {
         TagID: tagId,
         Type: tagType === 'video' ? 'Video Scene' : 'Image Scene',
         Section: tagSection || 'N/A',
-        Status: status,
+        Status: matched ? 'Generated' : 'Pending',
         Asset: matched ? matched.name : 'Pending generation'
+      }
+    });
+    return;
+  }
+
+  // 2. Clicked on a standalone markdown image
+  const imgTarget = event.target.closest('img');
+  if (imgTarget) {
+    const src = imgTarget.getAttribute('src');
+    const alt = imgTarget.getAttribute('alt') || 'Scene Illustration';
+    emit('preview', {
+      src,
+      title: alt,
+      type: 'image',
+      prompt: '',
+      details: {
+        Workspace: props.stem,
+        Context: 'Story Reader'
       }
     });
   }
@@ -436,5 +564,111 @@ async function copyRaw() {
 .empty-icon {
   font-size: 40px;
   color: var(--text-muted);
+}
+
+/* Inline Paragraph Insertion Zone */
+:deep(.para-insert-zone) {
+  height: 24px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  margin: 4px 0;
+  z-index: 2;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+:deep(.para-insert-zone)::before {
+  content: '';
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 50%;
+  height: 1px;
+  background: var(--primary, #6750a4);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+:deep(.para-insert-zone:hover)::before {
+  opacity: 0.4;
+}
+
+:deep(.para-insert-btn) {
+  opacity: 0;
+  transform: scale(0.92);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--bg-surface, #ffffff);
+  color: var(--primary, #6750a4);
+  border: 1px solid var(--primary, #6750a4);
+  border-radius: 9999px;
+  padding: 0.25rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(103, 80, 164, 0.18);
+  pointer-events: none;
+  z-index: 3;
+}
+
+:deep(.para-insert-zone:hover .para-insert-btn) {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+  background: var(--primary-container, #eaddff);
+  color: var(--primary-on-container, #21005d);
+}
+
+:deep(.para-insert-btn .material-symbols-rounded) {
+  font-size: 1.1rem;
+}
+
+.add-scene-toolbar-btn {
+  background: var(--primary, #6750a4);
+  color: #ffffff;
+  font-weight: 600;
+  gap: 0.35rem;
+  border-radius: 9999px;
+  padding: 0.35rem 0.85rem;
+  box-shadow: 0 2px 6px rgba(103, 80, 164, 0.25);
+  transition: all 0.2s ease;
+}
+
+.add-scene-toolbar-btn:hover {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(103, 80, 164, 0.35);
+}
+
+.add-scene-toolbar-btn .material-symbols-rounded {
+  font-size: 1.1rem;
+}
+
+.reader-hint-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.25rem;
+  background: var(--primary-container, rgba(103, 80, 164, 0.08));
+  border: 1px solid rgba(103, 80, 164, 0.2);
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.hint-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hint-icon {
+  font-size: 1.2rem;
+  color: var(--primary, #6750a4);
 }
 </style>
