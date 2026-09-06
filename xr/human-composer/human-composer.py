@@ -149,8 +149,12 @@ def handle_bind(args):
 
     os.makedirs(model_dir, exist_ok=True)
 
-    preview_img_path = os.path.join(model_dir, "preview.png")
-    preview_vid_path = os.path.join(model_dir, "preview_animation.mp4")
+    # Optional preview outputs
+    generate_preview = args.preview
+    generate_preview_anim = args.preview_anim or bool(args.anim)
+
+    preview_img_path = os.path.join(model_dir, "preview.png") if generate_preview else None
+    preview_vid_path = os.path.join(model_dir, "preview_animation.mp4") if generate_preview_anim else None
 
     # Intermediate handling
     is_intermediate = args.intermediate
@@ -163,8 +167,10 @@ def handle_bind(args):
     print(f"[Human Composer] Hair: {args.hair}")
     print(f"[Human Composer] Model Directory: {model_dir}")
     print(f"[Human Composer] Target USDZ: {output_usdz}")
-    print(f"[Human Composer] Static Preview: {preview_img_path}")
-    print(f"[Human Composer] Preview Animation: {preview_vid_path}")
+    if preview_img_path:
+        print(f"[Human Composer] Static Preview: {preview_img_path}")
+    if preview_vid_path:
+        print(f"[Human Composer] Preview Animation: {preview_vid_path}")
     if is_intermediate:
         print(f"[Human Composer] Intermediates Directory: {intermediate_dir}")
 
@@ -195,6 +201,7 @@ def handle_bind(args):
         config = {
             "body": os.path.abspath(args.body),
             "hair": os.path.abspath(args.hair),
+            "anim": os.path.abspath(args.anim) if args.anim else None,
             "output_usdz": output_usdz,
             "preview_image_path": preview_img_path,
             "preview_video_path": preview_vid_path,
@@ -234,8 +241,10 @@ def handle_bind(args):
         print("========================================================")
         print(f"  Model Output Directory: {model_dir}")
         print(f"  -> Bound Model (USDZ) : {output_usdz}")
-        print(f"  -> Static Preview     : {preview_img_path}")
-        print(f"  -> Animation (MP4)    : {preview_vid_path}")
+        if preview_img_path:
+            print(f"  -> Static Preview     : {preview_img_path}")
+        if preview_vid_path:
+            print(f"  -> Animation (MP4)    : {preview_vid_path}")
         if is_intermediate:
             inter_items = os.listdir(intermediate_dir)
             print(f"  -> Intermediates ({len(inter_items)} files): {intermediate_dir}")
@@ -251,12 +260,41 @@ def handle_bind(args):
             os.remove(config_path)
 
 
+def handle_info(args):
+    model_path = args.model or args.model_opt
+    if not model_path:
+        print("[Error] Please specify the path to a 3D model: python human-composer.py info <model.usdz>", file=sys.stderr)
+        sys.exit(1)
+
+    if not os.path.exists(model_path):
+        print(f"[Error] Model file not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    blender_bin = find_blender(args.blender)
+    if not blender_bin:
+        print("[Error] Blender executable not found. Please install Blender or pass --blender.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.model_inspector import inspect_model, format_model_info
+
+    try:
+        data = inspect_model(model_path, blender_bin)
+        if args.json:
+            print(json.dumps(data, indent=2))
+        else:
+            print(format_model_info(data, selected_part=args.part))
+    except Exception as e:
+        print(f"[Error] Failed to inspect model: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Human Composer: 3D human composition and accessory binding tool."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Subcommand: bind
     bind_parser = subparsers.add_parser(
         "bind", help="Bind a hair model to a human body model with alignment."
     )
@@ -288,17 +326,52 @@ def main():
         "--name", default=None, help="Model name for subdir (default: inferred from body filename)."
     )
     bind_parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Generate a high-resolution static preview image (preview.png)."
+    )
+    bind_parser.add_argument(
+        "--preview-anim",
+        action="store_true",
+        help="Generate a sequenced preview showcase animation video (preview_animation.mp4)."
+    )
+    bind_parser.add_argument(
         "--intermediate",
         action="store_true",
         help="Also output all intermediate multi-angle renders and reference comparison images."
     )
     bind_parser.add_argument(
+        "--anim", default=None, help="Path to optional skeletal animation file (USDZ/USDC) to showcase in preview MP4."
+    )
+    bind_parser.add_argument(
         "--blender", default=None, help="Path to Blender executable."
+    )
+
+    # Subcommand: info
+    info_parser = subparsers.add_parser(
+        "info", help="Inspect and list 3D model information (parts, bounding box, vertices, textures, skeleton)."
+    )
+    info_parser.add_argument(
+        "model", nargs="?", default=None, help="Path to 3D model (USDZ, USDC, OBJ, etc.)."
+    )
+    info_parser.add_argument(
+        "--model", dest="model_opt", default=None, help="Path to 3D model (alternative to positional argument)."
+    )
+    info_parser.add_argument(
+        "--part", default=None, help="Specific part/mesh name, material name, or index to inspect."
+    )
+    info_parser.add_argument(
+        "--json", action="store_true", help="Output information in raw JSON format."
+    )
+    info_parser.add_argument(
+        "--blender", default=None, help="Path to custom Blender executable."
     )
 
     args = parser.parse_args()
     if args.command == "bind":
         handle_bind(args)
+    elif args.command == "info":
+        handle_info(args)
 
 
 if __name__ == "__main__":

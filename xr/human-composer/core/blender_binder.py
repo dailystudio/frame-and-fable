@@ -162,6 +162,28 @@ def main():
         if not armature:
             raise RuntimeError("Failed to locate armature in imported USDZ.")
 
+        # Detect any skeletal animation on imported body
+        first_skeleton_action = None
+        if armature.animation_data and armature.animation_data.action:
+            first_skeleton_action = armature.animation_data.action
+            armature.animation_data.action = None
+        elif bpy.data.actions:
+            first_skeleton_action = bpy.data.actions[0]
+
+        # Load optional external animation file if provided (only needed if rendering preview animation)
+        anim_file = config.get("anim")
+        if preview_video_path and anim_file and os.path.exists(anim_file):
+            print(f"[Blender Binder] Loading external animation from: {anim_file}")
+            pre_anim_objs = set(bpy.context.scene.objects)
+            bpy.ops.wm.usd_import(filepath=anim_file)
+            new_anim_objs = [o for o in bpy.context.scene.objects if o not in pre_anim_objs]
+            for o in new_anim_objs:
+                if o.type == "ARMATURE" and o.animation_data and o.animation_data.action:
+                    first_skeleton_action = o.animation_data.action
+                bpy.data.objects.remove(o, do_unlink=True)
+            if first_skeleton_action:
+                print(f"[Blender Binder] Detected skeleton animation: {first_skeleton_action.name}")
+
         update_material_texture(body_mesh, "Body_Material", body_tex)
 
         existing_objs = set(bpy.context.scene.objects)
@@ -189,7 +211,22 @@ def main():
         body_z_max = float(body_coords[:, 2].max())
         body_height = body_z_max - body_z_min
 
-        head_vg = body_mesh.vertex_groups.get("mixamorig_Head")
+        # Detect head bone name from armature or vertex groups
+        head_bone_name = "mixamorig_Head"
+        if armature:
+            bone_names = [b.name for b in armature.data.bones]
+            if "mixamorig_Head" in bone_names:
+                head_bone_name = "mixamorig_Head"
+            elif "Head" in bone_names:
+                head_bone_name = "Head"
+            else:
+                for b_name in bone_names:
+                    b_low = b_name.lower()
+                    if "head" in b_low and "end" not in b_low and "top" not in b_low:
+                        head_bone_name = b_name
+                        break
+
+        head_vg = body_mesh.vertex_groups.get(head_bone_name)
         head_vert_indices = []
         if head_vg:
             head_vert_indices = [
@@ -238,11 +275,11 @@ def main():
             ref_char_height = float(ref_front["char_height"])
             m_per_px = body_height / ref_char_height
             target_width = float(ref_front["head_width"]) * m_per_px
-            target_top = body_z_min + (float(ref_front["char_y_max"] - ref_front["head_y_min"])) * m_per_px + 0.02
+            target_top = body_z_min + (float(ref_front["char_y_max"] - ref_front["head_y_min"])) * m_per_px + 0.035
         else:
             m_per_px = body_height / 3950.0
-            target_width = head_width * 1.14
-            target_top = head_z_max + 0.04
+            target_width = head_width * 1.16
+            target_top = head_z_max + 0.055
 
         if ref_side:
             side_m_per_px = body_height / float(ref_side["char_height"])
@@ -254,12 +291,12 @@ def main():
             else:
                 target_y_center = head_y_center - (offset_px * side_m_per_px)
         else:
-            target_depth = target_width * (head_depth / head_width) * 1.06
+            target_depth = target_width * (head_depth / head_width) * 1.08
             target_y_center = head_y_center + 0.04
 
-        scale_x = (target_width / hair_width) * 1.025
-        scale_y = (target_depth / hair_depth) * 1.04
-        scale_z = scale_x * 1.02
+        scale_x = (target_width / hair_width) * 1.045
+        scale_y = (target_depth / hair_depth) * 1.055
+        scale_z = scale_x * 1.035
 
         target_y_center = max(target_y_center, head_y_center + 0.038)
 
@@ -269,13 +306,50 @@ def main():
 
         # Crown coverage check
         scaled_hair_top = hair_z_max * scale_z + loc_z
-        if scaled_hair_top < head_z_max + 0.03:
-            loc_z += (head_z_max + 0.035 - scaled_hair_top)
+        if scaled_hair_top < head_z_max + 0.045:
+            loc_z += (head_z_max + 0.048 - scaled_hair_top)
 
         # Rear skull coverage check
         scaled_hair_back = hair_y_max * scale_y + loc_y
-        if scaled_hair_back < head_y_max + 0.02:
-            loc_y += (head_y_max + 0.025 - scaled_hair_back)
+        if scaled_hair_back < head_y_max + 0.025:
+            loc_y += (head_y_max + 0.028 - scaled_hair_back)
+
+        # Automated anti-clipping solver to prevent scalp poking through hair parting
+        from mathutils.bvhtree import BVHTree
+        import mathutils
+
+        upper_head_verts = [v for v in head_coords if v[2] > (head_z_max - 0.10)]
+        hair_polys = [p.vertices for p in hair_mesh.data.polygons]
+
+        def check_scalp_clipping(sx, sy, sz, lx, ly, lz):
+            th_coords = hair_coords.copy()
+            th_coords[:, 0] = th_coords[:, 0] * sx + lx
+            th_coords[:, 1] = th_coords[:, 1] * sy + ly
+            th_coords[:, 2] = th_coords[:, 2] * sz + lz
+            bvh = BVHTree.FromPolygons(th_coords, hair_polys)
+            
+            clips = 0
+            for hv in upper_head_verts:
+                origin = mathutils.Vector(hv)
+                loc, _, _, _ = bvh.ray_cast(origin, mathutils.Vector((0, 0, 1)))
+                if loc is None:
+                    dloc, _, _, ddist = bvh.ray_cast(origin, mathutils.Vector((0, 0, -1)))
+                    if dloc is not None and ddist < 0.04:
+                        clips += 1
+            return clips
+
+        clips = check_scalp_clipping(scale_x, scale_y, scale_z, loc_x, loc_y, loc_z)
+        anti_clip_iters = 0
+        while clips > 0 and anti_clip_iters < 6:
+            anti_clip_iters += 1
+            scale_x *= 1.015
+            scale_y *= 1.015
+            scale_z *= 1.015
+            loc_z += 0.005
+            clips = check_scalp_clipping(scale_x, scale_y, scale_z, loc_x, loc_y, loc_z)
+
+        if anti_clip_iters > 0:
+            print(f"[Blender Binder] Anti-clipping solver adjusted hair (iterations: {anti_clip_iters}, remaining clips: {clips})")
 
         print(f"[Blender Binder] Optimal scale: ({scale_x:.4f}, {scale_y:.4f}, {scale_z:.4f})")
         print(f"[Blender Binder] Optimal location: ({loc_x:.4f}, {loc_y:.4f}, {loc_z:.4f})")
@@ -297,7 +371,6 @@ def main():
         mod = hair_mesh.modifiers.new(name="Armature", type="ARMATURE")
         mod.object = armature
 
-        head_bone_name = "mixamorig_Head"
         vg = hair_mesh.vertex_groups.new(name=head_bone_name)
         vg.add(list(range(len(hair_mesh.data.vertices))), 1.0, "REPLACE")
         print(f"[Blender Binder] Rigged hair to bone: {head_bone_name}")
@@ -317,15 +390,17 @@ def main():
         )
         print("[Blender Binder] USDZ export complete.")
 
-        # Setup Camera & Lighting for Previews
-        setup_lighting_and_world()
+        # Setup Camera & Lighting for Previews (only if rendering is needed)
+        needs_render = bool(preview_image_path or (render_intermediate and intermediate_dir) or preview_video_path)
+        if needs_render:
+            setup_lighting_and_world()
 
-        cam_data = bpy.data.cameras.new("PreviewCamera")
-        cam_data.type = "ORTHO"
-        cam_data.ortho_scale = 2.05
-        cam_obj = bpy.data.objects.new("PreviewCamera", cam_data)
-        bpy.context.scene.collection.objects.link(cam_obj)
-        bpy.context.scene.camera = cam_obj
+            cam_data = bpy.data.cameras.new("PreviewCamera")
+            cam_data.type = "ORTHO"
+            cam_data.ortho_scale = 2.05
+            cam_obj = bpy.data.objects.new("PreviewCamera", cam_data)
+            bpy.context.scene.collection.objects.link(cam_obj)
+            bpy.context.scene.camera = cam_obj
 
         # 9. Render Static Preview Image
         if preview_image_path:
@@ -361,38 +436,134 @@ def main():
                 bpy.context.scene.render.filepath = img_path
                 bpy.ops.render.render(write_still=True)
 
-        # 11. Render 360° Turntable Animation (MP4)
+        # 11. Render Sequenced Preview Animation (MP4)
         if preview_video_path:
             print(f"[Blender Binder] Rendering preview animation to {preview_video_path}...")
             os.makedirs(os.path.dirname(os.path.abspath(preview_video_path)), exist_ok=True)
 
-            target_rot_obj = root_empty if root_empty else armature
-            target_rot_obj.rotation_mode = 'XYZ'
-            target_rot_obj.animation_data_clear()
+            phase1_frames = 48  # 360 Turntable rotation (2.0s)
+            phase2_frames = 48  # 180 Look Left - Right Head animation (2.0s)
+            phase2_start = phase1_frames + 1  # Frame 49
+            phase2_end = phase1_frames + phase2_frames  # Frame 96
 
-            total_frames = 48
+            phase3_start = phase2_end + 1  # Frame 97
+            phase3_frames = 0
+
+            armature.animation_data_create()
+            armature.animation_data.action = None
+
+            # Phase 2: 180° look left-right head animation
+            head_pbone = armature.pose.bones.get(head_bone_name) if armature else None
+            if head_pbone:
+                head_action = bpy.data.actions.new(name="Head_Look_Action")
+                armature.animation_data.action = head_action
+                head_pbone.rotation_mode = 'XYZ'
+
+                # Neutral at frame 49
+                head_pbone.rotation_euler = (0, 0, 0)
+                head_pbone.keyframe_insert(data_path="rotation_euler", index=1, frame=phase2_start)
+
+                # Look left (+65 deg) at frame 61
+                head_pbone.rotation_euler.y = math.radians(65)
+                head_pbone.keyframe_insert(data_path="rotation_euler", index=1, frame=phase2_start + 12)
+
+                # Look right (-65 deg) at frame 73 (~130-140 deg sweep)
+                head_pbone.rotation_euler.y = math.radians(-65)
+                head_pbone.keyframe_insert(data_path="rotation_euler", index=1, frame=phase2_start + 24)
+
+                # Return to center at frame 85
+                head_pbone.rotation_euler.y = 0.0
+                head_pbone.keyframe_insert(data_path="rotation_euler", index=1, frame=phase2_start + 36)
+
+                # Hold center until frame 96
+                head_pbone.rotation_euler.y = 0.0
+                head_pbone.keyframe_insert(data_path="rotation_euler", index=1, frame=phase2_end)
+
+                for fc in head_action.fcurves:
+                    for kf in fc.keyframe_points:
+                        kf.interpolation = 'BEZIER'
+
+                track_head = armature.animation_data.nla_tracks.new()
+                track_head.name = "HeadLookTrack"
+                strip_head = track_head.strips.new("HeadLookStrip", phase2_start, head_action)
+                strip_head.action_frame_start = phase2_start
+                strip_head.action_frame_end = phase2_end
+                armature.animation_data.action = None
+
+            # Phase 3: First skeleton animation (if present)
+            if first_skeleton_action:
+                act_start = int(first_skeleton_action.frame_range[0])
+                act_end = int(first_skeleton_action.frame_range[1])
+                act_len = max(1, act_end - act_start)
+                phase3_frames = min(72, act_len)  # Play up to 3 seconds of the action
+                track_skel = armature.animation_data.nla_tracks.new()
+                track_skel.name = "SkeletonAnimTrack"
+                strip_skel = track_skel.strips.new("SkeletonAnimStrip", phase3_start, first_skeleton_action)
+                strip_skel.action_frame_start = act_start
+                strip_skel.action_frame_end = act_start + phase3_frames
+                strip_skel.blend_type = 'REPLACE'
+                print(f"[Blender Binder] Sequenced skeleton action '{first_skeleton_action.name}' for Phase 3 (frames {phase3_start}-{phase3_start + phase3_frames})")
+
+            total_frames = phase2_end + phase3_frames
             bpy.context.scene.frame_start = 1
             bpy.context.scene.frame_end = total_frames
             bpy.context.scene.render.fps = 24
 
-            # Keyframe 360 rotation with linear interpolation
+            # Phase 1: 360° Turntable rotation on root empty / armature
+            target_rot_obj = root_empty if root_empty else armature
+            target_rot_obj.rotation_mode = 'XYZ'
+            target_rot_obj.animation_data_clear()
+
             target_rot_obj.rotation_euler.z = 0.0
             target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=1)
 
-            # Continuous loop: frame total_frames reaches 2pi * (frames - 1) / frames
-            target_rot_obj.rotation_euler.z = 2.0 * math.pi * (total_frames - 1) / total_frames
+            target_rot_obj.rotation_euler.z = 2.0 * math.pi * (phase1_frames - 1) / phase1_frames
+            target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=phase1_frames)
+
+            # Hold stationary (facing front) during Phase 2 and Phase 3
+            target_rot_obj.rotation_euler.z = 0.0
+            target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=phase2_start)
             target_rot_obj.keyframe_insert(data_path="rotation_euler", index=2, frame=total_frames)
 
-            # Make interpolation linear
             if target_rot_obj.animation_data and target_rot_obj.animation_data.action:
-                for fcurve in target_rot_obj.animation_data.action.fcurves:
-                    for kf in fcurve.keyframe_points:
-                        kf.interpolation = 'LINEAR'
+                for fc in target_rot_obj.animation_data.action.fcurves:
+                    for kf in fc.keyframe_points:
+                        if kf.co.x <= phase1_frames:
+                            kf.interpolation = 'LINEAR'
+                        else:
+                            kf.interpolation = 'CONSTANT'
 
-            # Camera pointing front
+            # Camera Framing: Full body in Phase 1 & 3, smooth zoom-in for Phase 2 head look
+            cam_data.animation_data_clear()
+            cam_obj.animation_data_clear()
+
             cam_obj.location = (0, -5.0, 0.95)
             cam_obj.rotation_euler = (math.radians(90), 0, 0)
+            cam_data.ortho_scale = 2.05
 
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=1)
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=phase1_frames - 2)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=1)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=phase1_frames - 2)
+
+            # Zoom into upper body / head for Phase 2
+            head_z_level = head_coords[:, 2].mean() if 'head_coords' in locals() else 1.65
+            cam_data.ortho_scale = 1.25
+            cam_obj.location.z = head_z_level - 0.15
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=phase2_start)
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=phase2_end - 4)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=phase2_start)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=phase2_end - 4)
+
+            # Zoom back out to full body for Phase 3
+            cam_data.ortho_scale = 2.05
+            cam_obj.location.z = 0.95
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=phase2_end)
+            cam_data.keyframe_insert(data_path="ortho_scale", frame=total_frames)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=phase2_end)
+            cam_obj.keyframe_insert(data_path="location", index=2, frame=total_frames)
+
+            # Video encoding settings
             bpy.context.scene.render.resolution_x = 512
             bpy.context.scene.render.resolution_y = 512
             bpy.context.scene.render.image_settings.file_format = 'FFMPEG'
@@ -403,7 +574,7 @@ def main():
             bpy.context.scene.render.filepath = preview_video_path
 
             bpy.ops.render.render(animation=True)
-            print(f"[Blender Binder] Saved preview animation: {preview_video_path}")
+            print(f"[Blender Binder] Saved multi-phase preview animation ({total_frames} frames): {preview_video_path}")
 
     finally:
         if os.path.exists(temp_root):
