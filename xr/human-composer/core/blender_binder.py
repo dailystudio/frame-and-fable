@@ -90,7 +90,7 @@ def align_upper_garment(upper_mesh, body_mesh, armature):
 
     # 1. Proportional Scaling
     scale_x = 0.90 * sh_ratio
-    scale_y = 0.94 * sh_ratio
+    scale_y = 0.96 * sh_ratio
     scale_z = 0.88 * sh_ratio
 
     upper_mesh.scale = (scale_x, scale_y, scale_z)
@@ -98,9 +98,9 @@ def align_upper_garment(upper_mesh, body_mesh, armature):
     upper_mesh.select_set(True)
     bpy.ops.object.transform_apply(scale=True)
 
-    # 2. Torso Positioning: align shoulder line and neck base
+    # 2. Torso Positioning: align shoulder line and neck base with forward chest clearance
     target_z = (p_sh_l.z + 0.090) - (0.890 * scale_z)
-    target_y = p_neck.y - 0.02 * sh_ratio
+    target_y = p_neck.y - 0.045 * sh_ratio
     target_x = (p_sh_l.x + p_sh_r.x) / 2.0
     upper_mesh.location = (target_x, target_y, target_z)
     bpy.ops.object.transform_apply(location=True)
@@ -117,7 +117,7 @@ def align_upper_garment(upper_mesh, body_mesh, armature):
     cuff_l_x = cuff_l_pts[:, 0].mean()
 
     delta_z = p_wr_l.z - cuff_l_z + 0.015
-    target_cuff_x = p_wr_l.x + 0.02
+    target_cuff_x = p_wr_l.x - 0.010
     delta_x = cuff_l_x - target_cuff_x
 
     for i, v in enumerate(coords):
@@ -128,17 +128,27 @@ def align_upper_garment(upper_mesh, body_mesh, armature):
             u = min(1.0, max(0.0, (v[0] - x_seam_l) / (x_cuff_l - x_seam_l)))
             lift_curve = u**0.7
             contract_curve = 3 * u**2 - 2 * u**3
-            rad_clearance = 1.04 + 0.02 * lift_curve
+            cuff_flare = 1.0 + 0.02 * (u**2)
+            rad_clearance = (1.06 + 0.04 * lift_curve) * cuff_flare
+
+            bone_y = p_sh_l.y + u * (p_wr_l.y - p_sh_l.y)
+            shift_y = (bone_y - (target_y + 0.018 * scale_y)) * (u**0.6)
+
             upper_mesh.data.vertices[i].co.x = v[0] - delta_x * contract_curve
-            upper_mesh.data.vertices[i].co.y = (v[1] - target_y) * rad_clearance + target_y
+            upper_mesh.data.vertices[i].co.y = (v[1] + shift_y - target_y) * rad_clearance + target_y
             upper_mesh.data.vertices[i].co.z = v[2] + delta_z * lift_curve + sh_boost
         elif v[0] < x_seam_r:
             u = min(1.0, max(0.0, (abs(v[0]) - abs(x_seam_r)) / (abs(x_cuff_r) - abs(x_seam_r))))
             lift_curve = u**0.7
             contract_curve = 3 * u**2 - 2 * u**3
-            rad_clearance = 1.04 + 0.02 * lift_curve
+            cuff_flare = 1.0 + 0.02 * (u**2)
+            rad_clearance = (1.06 + 0.04 * lift_curve) * cuff_flare
+
+            bone_y = p_sh_r.y + u * (p_wr_r.y - p_sh_r.y)
+            shift_y = (bone_y - (target_y + 0.018 * scale_y)) * (u**0.6)
+
             upper_mesh.data.vertices[i].co.x = v[0] + delta_x * contract_curve
-            upper_mesh.data.vertices[i].co.y = (v[1] - target_y) * rad_clearance + target_y
+            upper_mesh.data.vertices[i].co.y = (v[1] + shift_y - target_y) * rad_clearance + target_y
             upper_mesh.data.vertices[i].co.z = v[2] + delta_z * lift_curve + sh_boost
         else:
             upper_mesh.data.vertices[i].co.z = v[2] + sh_boost
@@ -552,6 +562,8 @@ def main():
             cam_data = bpy.data.cameras.new("PreviewCamera")
             cam_data.type = "ORTHO"
             cam_data.ortho_scale = 2.05
+            cam_data.clip_start = 0.01
+            cam_data.clip_end = 100.0
             cam_obj = bpy.data.objects.new("PreviewCamera", cam_data)
             bpy.context.scene.collection.objects.link(cam_obj)
             bpy.context.scene.camera = cam_obj
@@ -612,6 +624,7 @@ def main():
                 "left": ((5.0, 0, 0.95), (math.radians(90), 0, math.radians(90))),
                 "right": ((-5.0, 0, 0.95), (math.radians(90), 0, math.radians(-90))),
                 "back": ((0, 5.0, 0.95), (math.radians(90), 0, math.radians(180))),
+                "bottom": ((0, 0, -4.0), (math.radians(180), 0, 0)),
             }
 
             for view_name, (cam_loc, cam_rot) in cam_views.items():
