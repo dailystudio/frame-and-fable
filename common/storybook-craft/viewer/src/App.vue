@@ -294,6 +294,7 @@
     <ImageLightbox
       ref="lightboxRef"
       :stem="selectedStem"
+      :workspace-data="workspaceData"
       @refresh="() => loadCurrentWorkspace(true)"
     />
 

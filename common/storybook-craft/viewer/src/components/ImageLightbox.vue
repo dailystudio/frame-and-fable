@@ -94,16 +94,21 @@
                     <h5 class="ref-name">{{ styleRef.style_name || styleRef.name }}</h5>
                     <p class="ref-desc">Guides artistic medium, textures, palette & lighting.</p>
                     <div class="ref-upload-row">
-                      <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
-                        <span class="material-symbols-rounded">cloud_upload</span>
-                        <span>{{ isUploadingRef ? 'Uploading...' : 'Change' }}</span>
-                        <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="onUploadStyleRef" />
-                      </label>
+                      <button
+                        type="button"
+                        class="clean-btn clean-btn-xs change-ref-btn"
+                        :disabled="isUploadingRef || isSelectingRef"
+                        title="Change style reference by selecting from workspace assets"
+                        @click="openAssetPicker('style')"
+                      >
+                        <span class="material-symbols-rounded">photo_library</span>
+                        <span>Change</span>
+                      </button>
                       <button
                         v-if="styleRef.assetUrl"
                         type="button"
                         class="clean-btn clean-btn-xs delete-ref-btn"
-                        :disabled="isUploadingRef"
+                        :disabled="isUploadingRef || isSelectingRef"
                         title="Delete this style reference image"
                         @click="onDeleteStyleRef"
                       >
@@ -131,16 +136,21 @@
                       <h5 class="ref-name">{{ c.name }}</h5>
                       <p class="ref-desc">Preserves visual identity, features & costume.</p>
                       <div class="ref-upload-row">
-                        <label class="clean-btn clean-btn-xs change-ref-btn" :class="{ disabled: isUploadingRef }">
-                          <span class="material-symbols-rounded">cloud_upload</span>
-                          <span>{{ isUploadingRef ? 'Uploading...' : 'Change' }}</span>
-                          <input type="file" accept="image/*" class="sr-only" :disabled="isUploadingRef" @change="e => onUploadCharRef(e, c.name)" />
-                        </label>
+                        <button
+                          type="button"
+                          class="clean-btn clean-btn-xs change-ref-btn"
+                          :disabled="isUploadingRef || isSelectingRef"
+                          title="Change character reference by selecting from workspace assets"
+                          @click="openAssetPicker('character', c.name)"
+                        >
+                          <span class="material-symbols-rounded">photo_library</span>
+                          <span>Change</span>
+                        </button>
                         <button
                           v-if="c.assetUrl"
                           type="button"
                           class="clean-btn clean-btn-xs delete-ref-btn"
-                          :disabled="isUploadingRef"
+                          :disabled="isUploadingRef || isSelectingRef"
                           title="Delete this character reference photo"
                           @click="onDeleteCharRef(c.name, c.assetUrl)"
                         >
@@ -450,15 +460,133 @@
           </div>
         </div>
       </div>
+      <!-- Reference Guide Picker Modal Overlay (Nested Modal) -->
+      <div v-if="showAssetPicker" class="asset-picker-overlay" @click.self="closeAssetPicker">
+        <div class="asset-picker-modal clean-card" @click.stop>
+          <div class="picker-header">
+            <div class="picker-title-group">
+              <span class="material-symbols-rounded picker-title-icon">
+                {{ pickerType === 'style' ? 'palette' : 'face' }}
+              </span>
+              <div>
+                <h4 class="picker-title">
+                  {{ pickerType === 'style' ? 'Select Style Reference Image' : `Select Reference Photo for ${pickerTargetName}` }}
+                </h4>
+                <p class="picker-subtitle">
+                  {{ pickerType === 'style'
+                    ? 'Choose an active guide from existing style reference images, or upload a new one.'
+                    : `Choose from existing reference photos for ${pickerTargetName}, or upload a new one.`
+                  }}
+                </p>
+              </div>
+            </div>
+            <button type="button" class="clean-icon-btn picker-close-btn" @click="closeAssetPicker">
+              <span class="material-symbols-rounded">close</span>
+            </button>
+          </div>
+
+          <!-- Filter Tabs & Tools -->
+          <div class="picker-toolbar">
+            <div v-if="pickerType === 'character'" class="picker-tabs">
+              <button
+                type="button"
+                class="picker-tab-btn"
+                :class="{ active: pickerTab === 'current' }"
+                @click="pickerTab = 'current'"
+              >
+                {{ pickerTargetName }} ({{ currentCharAssetsCount }})
+              </button>
+              <button
+                type="button"
+                class="picker-tab-btn"
+                :class="{ active: pickerTab === 'all' }"
+                @click="pickerTab = 'all'"
+              >
+                All Characters ({{ allCharAssetsCount }})
+              </button>
+            </div>
+            <div v-else class="picker-style-indicator">
+              <span class="material-symbols-rounded style-ind-icon">collections</span>
+              <span>Available Style Images ({{ filteredRefImages.length }})</span>
+            </div>
+
+            <div class="picker-tools">
+              <div class="picker-search-wrap">
+                <span class="material-symbols-rounded search-icon">search</span>
+                <input
+                  v-model="pickerSearch"
+                  type="text"
+                  placeholder="Search photos..."
+                  class="picker-search-input"
+                />
+                <button
+                  v-if="pickerSearch"
+                  type="button"
+                  class="search-clear-btn"
+                  @click="pickerSearch = ''"
+                >
+                  <span class="material-symbols-rounded">close</span>
+                </button>
+              </div>
+
+              <label class="clean-btn clean-btn-xs picker-upload-btn" :class="{ disabled: isUploadingRef || isSelectingRef }">
+                <span class="material-symbols-rounded">cloud_upload</span>
+                <span>{{ isUploadingRef ? 'Uploading...' : (pickerType === 'style' ? 'Upload Style Image' : 'Upload Photo') }}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  class="sr-only"
+                  :disabled="isUploadingRef || isSelectingRef"
+                  @change="onUploadViaPicker"
+                />
+              </label>
+            </div>
+          </div>
+
+          <!-- Images Grid -->
+          <div class="picker-body">
+            <div v-if="filteredRefImages.length === 0" class="picker-empty-state">
+              <span class="material-symbols-rounded">image_not_supported</span>
+              <p>No existing reference images found.</p>
+              <small>Click "Upload Photo" above to add a reference image.</small>
+            </div>
+            <div v-else class="picker-grid">
+              <div
+                v-for="item in filteredRefImages"
+                :key="item.id"
+                class="picker-card"
+                :class="{ 'is-selected': isAssetCurrentlyActive(item), 'is-busy': isSelectingRef }"
+                @click="onSelectAsset(item)"
+              >
+                <div class="picker-thumb-wrap">
+                  <img :src="item.assetUrl" :alt="item.name" class="picker-thumb" loading="lazy" />
+                  <span v-if="isAssetCurrentlyActive(item)" class="picker-active-badge">
+                    <span class="material-symbols-rounded">check_circle</span>
+                    Active
+                  </span>
+                </div>
+                <div class="picker-info">
+                  <div class="picker-name" :title="item.displayName || item.name">{{ item.displayName || item.name }}</div>
+                  <div class="picker-badge-row">
+                    <span class="picker-cat-badge" :class="item.category">{{ item.categoryLabel }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </dialog>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import {
   uploadReferenceImage,
   deleteReferenceImage,
+  selectReferenceImage,
+  getWorkspace,
   isTagGenerating,
   getGenerationStatus,
   runTagGeneration,
@@ -472,7 +600,8 @@ import {
 } from '../services/api';
 
 const props = defineProps({
-  stem: { type: String, default: '' }
+  stem: { type: String, default: '' },
+  workspaceData: { type: Object, default: () => null }
 });
 const emit = defineEmits(['refresh']);
 
@@ -495,6 +624,225 @@ const copiedKey = ref('');
 
 const isUploadingRef = ref(false);
 const localStatusMsg = ref('');
+
+// Reference Guide Picker State
+const showAssetPicker = ref(false);
+const pickerType = ref('style'); // 'style' | 'character'
+const pickerTargetName = ref('');
+const pickerTab = ref('current'); // for character: 'current' | 'all'
+const pickerSearch = ref('');
+const isSelectingRef = ref(false);
+const fallbackWsData = ref(null);
+
+const availableRefImages = computed(() => {
+  const ws = props.workspaceData || fallbackWsData.value;
+  const currentStem = activeStem.value;
+  if (!currentStem || !ws) return [];
+
+  if (pickerType.value === 'style') {
+    const styleImgs = ws.style?.images || [];
+    return styleImgs.map(imgName => ({
+      id: `style_${imgName}`,
+      name: imgName,
+      filename: imgName,
+      category: 'style',
+      categoryLabel: ws.style?.style_name || 'Art Style',
+      path: `style-ref/${imgName}`,
+      assetUrl: `/api/asset/${encodeURIComponent(currentStem)}/style-ref/${encodeURIComponent(imgName)}`
+    }));
+  }
+
+  if (pickerType.value === 'character') {
+    const list = [];
+    const targetName = pickerTargetName.value;
+    const characters = ws.characters || [];
+
+    // Target character's reference photos
+    const targetChar = characters.find(c => c.name === targetName);
+    if (targetChar && Array.isArray(targetChar.images)) {
+      for (const imgName of targetChar.images) {
+        list.push({
+          id: `char_${targetName}_${imgName}`,
+          name: imgName,
+          displayName: `${targetName} / ${imgName}`,
+          filename: imgName,
+          characterName: targetName,
+          isTargetChar: true,
+          category: 'character',
+          categoryLabel: targetName,
+          path: `char-ref/${targetName}/${imgName}`,
+          assetUrl: `/api/asset/${encodeURIComponent(currentStem)}/char-ref/${encodeURIComponent(targetName)}/${encodeURIComponent(imgName)}`
+        });
+      }
+    }
+
+    // Other characters' reference photos
+    for (const ch of characters) {
+      if (ch.name === targetName) continue;
+      if (Array.isArray(ch.images)) {
+        for (const imgName of ch.images) {
+          list.push({
+            id: `char_${ch.name}_${imgName}`,
+            name: imgName,
+            displayName: `${ch.name} / ${imgName}`,
+            filename: imgName,
+            characterName: ch.name,
+            isTargetChar: false,
+            category: 'character',
+            categoryLabel: ch.name,
+            path: `char-ref/${ch.name}/${imgName}`,
+            assetUrl: `/api/asset/${encodeURIComponent(currentStem)}/char-ref/${encodeURIComponent(ch.name)}/${encodeURIComponent(imgName)}`
+          });
+        }
+      }
+    }
+
+    return list;
+  }
+
+  return [];
+});
+
+const currentCharAssetsCount = computed(() => {
+  return availableRefImages.value.filter(a => a.isTargetChar).length;
+});
+
+const allCharAssetsCount = computed(() => {
+  return availableRefImages.value.length;
+});
+
+const filteredRefImages = computed(() => {
+  let list = availableRefImages.value;
+
+  if (pickerType.value === 'character' && pickerTab.value === 'current') {
+    list = list.filter(a => a.isTargetChar);
+  }
+
+  if (pickerSearch.value.trim()) {
+    const q = pickerSearch.value.trim().toLowerCase();
+    list = list.filter(a =>
+      a.name.toLowerCase().includes(q) ||
+      (a.displayName && a.displayName.toLowerCase().includes(q)) ||
+      (a.categoryLabel && a.categoryLabel.toLowerCase().includes(q))
+    );
+  }
+
+  return list;
+});
+
+function isAssetCurrentlyActive(item) {
+  if (pickerType.value === 'style') {
+    if (!styleRef.value) return false;
+    return styleRef.value.name === item.filename ||
+           (styleRef.value.assetUrl && styleRef.value.assetUrl.includes(item.filename));
+  }
+  if (pickerType.value === 'character') {
+    const targetChar = (characterRefs.value || []).find(c => c.name === pickerTargetName.value);
+    if (!targetChar || !targetChar.assetUrl) return false;
+    return targetChar.assetUrl.includes(item.filename);
+  }
+  return false;
+}
+
+async function openAssetPicker(type, targetName = '') {
+  pickerType.value = type;
+  pickerTargetName.value = targetName;
+  pickerSearch.value = '';
+  pickerTab.value = 'current';
+  showAssetPicker.value = true;
+
+  const currentStem = activeStem.value;
+  if (currentStem && (!props.workspaceData || !props.workspaceData.characters)) {
+    try {
+      const data = await getWorkspace(currentStem);
+      fallbackWsData.value = data;
+    } catch (e) {
+      console.warn('Could not load workspace references for picker:', e);
+    }
+  }
+}
+
+function closeAssetPicker() {
+  showAssetPicker.value = false;
+}
+
+async function onSelectAsset(item) {
+  const currentStem = activeStem.value;
+  if (!currentStem || isSelectingRef.value) return;
+
+  isSelectingRef.value = true;
+  localStatusMsg.value = `Setting '${item.filename}' as ${pickerType.value} reference guide...`;
+
+  try {
+    const res = await selectReferenceImage(currentStem, {
+      type: pickerType.value,
+      characterName: pickerTargetName.value,
+      assetPath: item.path,
+      filename: item.filename
+    });
+
+    if (pickerType.value === 'style') {
+      if (styleRef.value) {
+        styleRef.value.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
+        styleRef.value.name = res.filename;
+      } else {
+        styleRef.value = {
+          name: res.filename,
+          assetUrl: `${res.assetUrl}?t=${Date.now()}`,
+          style_name: res.filename,
+          role: 'Style Reference (Always Active)'
+        };
+      }
+      localStatusMsg.value = `✨ Style reference updated to '${res.filename}'! Click 'Regenerate Scene' to re-render.`;
+    } else if (pickerType.value === 'character') {
+      const targetChar = (characterRefs.value || []).find(c => c.name === pickerTargetName.value);
+      if (targetChar) {
+        targetChar.image = res.filename;
+        targetChar.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
+      }
+      localStatusMsg.value = `✨ Reference photo for '${pickerTargetName.value}' updated to '${res.filename}'! Click 'Regenerate Scene' to re-render.`;
+    }
+
+    emit('refresh');
+    showAssetPicker.value = false;
+  } catch (err) {
+    localStatusMsg.value = `❌ Failed to select reference: ${err.message}`;
+    alert(`Failed to set reference asset: ${err.message}`);
+  } finally {
+    isSelectingRef.value = false;
+  }
+}
+
+watch(() => props.workspaceData, (newData) => {
+  if (!isOpen.value || !tagId.value || !newData?.tags) return;
+  const currentTag = newData.tags.find(t => t.id === tagId.value);
+  if (currentTag) {
+    if (currentTag.style_ref !== undefined) {
+      styleRef.value = currentTag.style_ref;
+    }
+    if (currentTag.character_refs) {
+      characterRefs.value = currentTag.character_refs;
+    }
+    if (currentTag.composed_prompt) {
+      composedPrompt.value = currentTag.composed_prompt;
+    }
+    if (currentTag.prompt) {
+      mediaPrompt.value = currentTag.prompt;
+    }
+    if (currentTag.cli_command) {
+      cliCommand.value = currentTag.cli_command;
+    }
+  }
+}, { deep: true });
+
+async function onUploadViaPicker(event) {
+  if (pickerType.value === 'style') {
+    await onUploadStyleRef(event);
+  } else if (pickerType.value === 'character') {
+    await onUploadCharRef(event, pickerTargetName.value);
+  }
+  showAssetPicker.value = false;
+}
 
 const isRegeneratingPrompt = ref(false);
 const isEditingPrompt = ref(false);
@@ -1545,32 +1893,6 @@ defineExpose({
   cursor: not-allowed;
 }
 
-/* Upload Buttons */
-.ref-upload-row {
-  margin-top: 0.35rem;
-}
-
-.change-ref-btn {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.72rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  background: var(--bg-surface-secondary);
-  border: 1px solid var(--border-default);
-  color: var(--text-primary);
-  transition: background 0.15s ease;
-}
-
-.change-ref-btn:hover {
-  background: var(--border-default);
-}
-
-.change-ref-btn .material-symbols-rounded {
-  font-size: 14px;
-}
 
 .sr-only {
   position: absolute;
@@ -1767,20 +2089,443 @@ defineExpose({
 .ref-upload-row {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.35rem;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
 }
 
-.delete-ref-btn {
+/* Ensure Change and Delete buttons are the exact same size */
+.ref-upload-row .change-ref-btn,
+.ref-upload-row .delete-ref-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.65rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ref-upload-row .change-ref-btn .material-symbols-rounded,
+.ref-upload-row .delete-ref-btn .material-symbols-rounded {
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ref-upload-row .change-ref-btn {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-default);
+}
+
+.ref-upload-row .change-ref-btn:hover:not(:disabled) {
+  background: var(--bg-surface-secondary);
+  border-color: var(--border-strong);
+  color: var(--accent-primary);
+}
+
+.ref-upload-row .delete-ref-btn {
   color: #ef4444;
   border-color: #fca5a5;
   background: #fef2f2;
 }
 
-.delete-ref-btn:hover {
+.ref-upload-row .delete-ref-btn:hover:not(:disabled) {
   background: #fee2e2;
   border-color: #f87171;
   color: #dc2626;
+}
+
+.ref-upload-row .change-ref-btn:disabled,
+.ref-upload-row .delete-ref-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Asset Picker Modal Styles */
+.asset-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: pickerOverlayFade 0.2s ease;
+}
+
+@keyframes pickerOverlayFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.asset-picker-modal {
+  width: 92vw;
+  max-width: 860px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  animation: pickerModalPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pickerModalPop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface-secondary);
+}
+
+.picker-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.picker-title-icon {
+  font-size: 24px;
+  color: var(--accent-primary);
+}
+
+.picker-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.picker-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.picker-close-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.picker-close-btn:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.picker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  flex-wrap: wrap;
+}
+
+.picker-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-surface-secondary);
+  padding: 0.2rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+}
+
+.picker-style-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-surface-secondary);
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+}
+
+.style-ind-icon {
+  font-size: 17px;
+  color: var(--accent-primary);
+}
+
+.picker-tab-btn {
+  border: none;
+  background: transparent;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.picker-tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.picker-tab-btn.active {
+  background: var(--bg-surface);
+  color: var(--accent-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.picker-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.picker-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.picker-search-wrap .search-icon {
+  position: absolute;
+  left: 0.5rem;
+  font-size: 16px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.picker-search-input {
+  height: 30px;
+  padding: 0 1.6rem 0 1.8rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-secondary);
+  color: var(--text-primary);
+  outline: none;
+  width: 170px;
+  transition: all 0.15s ease;
+}
+
+.picker-search-input:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-surface);
+  width: 210px;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 0.4rem;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.search-clear-btn .material-symbols-rounded {
+  font-size: 14px;
+}
+
+.picker-upload-btn {
+  height: 30px;
+  padding: 0 0.7rem;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.picker-upload-btn .material-symbols-rounded {
+  font-size: 16px;
+}
+
+.picker-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+  min-height: 280px;
+  max-height: calc(85vh - 160px);
+}
+
+.picker-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+  gap: 0.5rem;
+}
+
+.picker-empty-state .material-symbols-rounded {
+  font-size: 36px;
+  opacity: 0.6;
+}
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.85rem;
+}
+
+.picker-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-surface-secondary);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  user-select: none;
+}
+
+.picker-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.picker-card.is-selected {
+  border-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.35);
+}
+
+.picker-card.is-busy {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.picker-thumb-wrap {
+  aspect-ratio: 16/10;
+  width: 100%;
+  background: #111;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.picker-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+
+.picker-card:hover .picker-thumb {
+  transform: scale(1.04);
+}
+
+.picker-active-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: #10b981;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.picker-active-badge .material-symbols-rounded {
+  font-size: 12px;
+}
+
+.picker-info {
+  padding: 0.45rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.picker-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-badge-row {
+  display: flex;
+  align-items: center;
+}
+
+.picker-cat-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.picker-cat-badge.scene {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0284c7;
+}
+
+.picker-cat-badge.style {
+  background: rgba(168, 85, 247, 0.12);
+  color: #9333ea;
+}
+
+.picker-cat-badge.character {
+  background: rgba(234, 88, 12, 0.12);
+  color: #ea580c;
 }
 
 /* Prompt Inspector */

@@ -230,6 +230,33 @@
           </span>
         </div>
 
+        <!-- Reference Guides Used Row -->
+        <div v-if="hasTaskReferences(task)" class="task-refs-row">
+          <span class="refs-label">
+            <span class="material-symbols-rounded">palette</span>
+            References:
+          </span>
+          <span
+            v-if="getTaskStyleRef(task)"
+            class="ref-chip style-ref-chip"
+            :title="`Style Reference: ${getTaskStyleRef(task)}`"
+          >
+            <span class="material-symbols-rounded">brush</span>
+            <span class="ref-chip-type">Style:</span>
+            <span class="ref-chip-name">{{ getTaskStyleRef(task) }}</span>
+          </span>
+          <span
+            v-for="ch in getTaskCharRefs(task)"
+            :key="ch.name"
+            class="ref-chip char-ref-chip"
+            :title="`Character Reference: ${ch.name} -> ${ch.image}`"
+          >
+            <span class="material-symbols-rounded">person</span>
+            <span class="ref-chip-type">{{ ch.name }}:</span>
+            <span class="ref-chip-name">{{ ch.image }}</span>
+          </span>
+        </div>
+
         <!-- Prompt Section -->
         <div v-if="task.prompt" class="task-prompt-box">
           <div class="task-prompt-head">
@@ -259,6 +286,27 @@
           >
             {{ expandedPrompts[task.id] ? 'Show Less' : 'Show Full Prompt' }}
           </button>
+        </div>
+
+        <!-- CLI Command Box -->
+        <div v-if="task.command" class="task-command-box">
+          <div class="task-command-head">
+            <span class="command-title">
+              <span class="material-symbols-rounded">terminal</span>
+              CLI Command
+            </span>
+            <button
+              type="button"
+              class="clean-btn clean-btn-xs"
+              @click="copyText(task.command, `cmd_${task.id}`)"
+            >
+              <span class="material-symbols-rounded">
+                {{ copiedKey === `cmd_${task.id}` ? 'check' : 'content_copy' }}
+              </span>
+              {{ copiedKey === `cmd_${task.id}` ? 'Copied' : 'Copy Command' }}
+            </button>
+          </div>
+          <pre class="task-command-code"><code>$ {{ task.command }}</code></pre>
         </div>
 
         <!-- Error Banner (if Failed) -->
@@ -641,6 +689,82 @@ function formatTime(isoStr) {
   } catch (e) {
     return isoStr;
   }
+}
+
+function extractAttachedRefsFromStdout(stdout) {
+  if (!stdout) return [];
+  const m = stdout.match(/Attached Reference Images \(\d+\):\s*([^\n]+)/);
+  if (m) {
+    return m[1].split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function getTaskStyleRef(task) {
+  if (task.ref_images?.style) return task.ref_images.style;
+
+  // Extract from command --style-image
+  if (task.command) {
+    const m = task.command.match(/--style-image\s+["']?([^"'\s]+)["']?/);
+    if (m) return m[1].split('/').pop();
+  }
+
+  // Extract from attached_ref_images or stdout
+  const attached = task.attached_ref_images || extractAttachedRefsFromStdout(task.stdout);
+  if (attached && attached.length > 0) {
+    return attached[0];
+  }
+  return null;
+}
+
+function getTaskCharRefs(task) {
+  if (task.ref_images?.characters && task.ref_images.characters.length > 0) {
+    return task.ref_images.characters;
+  }
+
+  const list = [];
+  // Extract from command --char-refs
+  if (task.command) {
+    const matches = [...task.command.matchAll(/--char-refs?\s+["']?([^"'\s]+)["']?/g)];
+    for (const m of matches) {
+      const parts = m[1].split(':');
+      if (parts.length >= 2) {
+        list.push({
+          name: parts[0],
+          image: parts[1].split('/').pop()
+        });
+      }
+    }
+  }
+
+  if (list.length > 0) return list;
+
+  // Extract from attached_ref_images or stdout
+  const attached = task.attached_ref_images || extractAttachedRefsFromStdout(task.stdout);
+  if (attached && attached.length > 1) {
+    for (let i = 1; i < attached.length; i++) {
+      list.push({
+        name: `Char Ref ${i}`,
+        image: attached[i]
+      });
+    }
+  }
+  return list;
+}
+
+function hasTaskReferences(task) {
+  return Boolean(getTaskStyleRef(task) || (getTaskCharRefs(task).length > 0));
+}
+
+function getTaskReferencesSummary(task) {
+  const s = getTaskStyleRef(task);
+  const chars = getTaskCharRefs(task);
+  const parts = [];
+  if (s) parts.push(`Style: ${s}`);
+  if (chars.length > 0) {
+    parts.push(chars.map(c => `${c.name}: ${c.image}`).join(', '));
+  }
+  return parts.join(' | ');
 }
 
 function truncate(str, maxLen = 60) {
@@ -1086,6 +1210,82 @@ function copyText(text, key) {
   color: #1565c0;
 }
 
+/* References Row */
+.task-refs-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.6rem;
+  background: var(--color-surface-subtle, rgba(0, 0, 0, 0.03));
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+
+.refs-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.refs-label .material-symbols-rounded {
+  font-size: 0.9rem;
+  color: var(--color-primary);
+}
+
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-family: monospace;
+}
+
+.ref-chip .material-symbols-rounded {
+  font-size: 0.85rem;
+}
+
+.ref-chip-type {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.ref-chip-name {
+  word-break: break-all;
+}
+
+.style-ref-chip {
+  background: rgba(142, 68, 173, 0.1);
+  color: #8e44ad;
+  border: 1px solid rgba(142, 68, 173, 0.25);
+}
+
+.char-ref-chip {
+  background: rgba(41, 128, 185, 0.1);
+  color: #2980b9;
+  border: 1px solid rgba(41, 128, 185, 0.25);
+}
+
+[data-theme="dark"] .style-ref-chip {
+  background: rgba(187, 134, 252, 0.15);
+  color: #bb86fc;
+  border-color: rgba(187, 134, 252, 0.3);
+}
+
+[data-theme="dark"] .char-ref-chip {
+  background: rgba(129, 212, 250, 0.15);
+  color: #81d4fa;
+  border-color: rgba(129, 212, 250, 0.3);
+}
+
 /* Prompt Box */
 .task-prompt-box {
   background: var(--color-surface-subtle, #fafafa);
@@ -1140,6 +1340,53 @@ function copyText(text, key) {
   font-weight: 600;
   color: var(--color-primary);
   cursor: pointer;
+}
+
+/* Command Box */
+.task-command-box {
+  background: var(--color-surface-subtle, #fafafa);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+}
+
+.task-command-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.command-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-sub);
+}
+
+.command-title .material-symbols-rounded {
+  font-size: 0.95rem;
+}
+
+.task-command-code {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  font-family: monospace;
+  color: var(--color-text-main);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: rgba(0, 0, 0, 0.03);
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+}
+
+[data-theme="dark"] .task-command-code {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* Error Box */

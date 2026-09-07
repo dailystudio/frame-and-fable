@@ -1611,6 +1611,21 @@ def setup_workspace_assets(
     if char_refs_arg:
         if verbose:
             print(f"[storybook assets] Processing {len(char_refs_arg)} user-specified character(s)...")
+
+        # First, preserve any existing characters in workspace.char_ref_dir
+        existing_char_dirs = [d for d in workspace.char_ref_dir.iterdir() if d.is_dir()] if workspace.char_ref_dir.exists() else []
+        existing_chars_by_name = {}
+        for cdir in existing_char_dirs:
+            cinfo_path = cdir / "character.json"
+            c_info: Dict[str, Any] = {}
+            if cinfo_path.exists():
+                try:
+                    with open(cinfo_path, "r", encoding="utf-8") as f:
+                        c_info = json.load(f)
+                except Exception:
+                    pass
+            existing_chars_by_name[cdir.name] = (cdir, c_info)
+
         for char_name, img_paths in char_refs_arg.items():
             cdir = workspace.get_char_dir(char_name, create=not dry_run)
             saved_images = []
@@ -1618,14 +1633,18 @@ def setup_workspace_assets(
                 src_path = Path(src_path_str)
                 dest_file = cdir / src_path.name
                 if src_path.exists():
-                    if not dry_run:
+                    if not dry_run and src_path.resolve() != dest_file.resolve():
                         shutil.copy2(src_path, dest_file)
                     saved_images.append(dest_file.name)
                     if verbose:
                         print(f"  -> Imported character reference for '{char_name}': {src_path} -> {dest_file}")
                 else:
-                    print(f"  Warning: Character reference image '{src_path}' not found.", file=sys.stderr)
-                    saved_images.append(src_path.name)
+                    # If not found at raw path, check if it's already in cdir
+                    if (cdir / src_path.name).exists():
+                        saved_images.append(src_path.name)
+                    else:
+                        print(f"  Warning: Character reference image '{src_path}' not found.", file=sys.stderr)
+                        saved_images.append(src_path.name)
 
             # Discover any other images already in cdir
             if not dry_run and cdir.exists():
@@ -1634,17 +1653,47 @@ def setup_workspace_assets(
                     if di not in saved_images:
                         saved_images.append(di)
 
+            # Retrieve existing character info if available to PRESERVE role, visual_dna, portrait_prompt
+            existing_info = existing_chars_by_name.get(char_name, (cdir, {}))[1]
+            if not existing_info and (cdir / "character.json").exists():
+                try:
+                    with open(cdir / "character.json", "r", encoding="utf-8") as f:
+                        existing_info = json.load(f)
+                except Exception:
+                    pass
+
             char_info = {
                 "name": char_name,
-                "role": "User Specified",
-                "visual_dna": f"Character {char_name}",
+                "role": existing_info.get("role", "User Specified"),
+                "visual_dna": existing_info.get("visual_dna", f"Character {char_name}"),
+                "portrait_prompt": existing_info.get("portrait_prompt", f"Portrait of {char_name}"),
                 "images": saved_images,
-                "source": "user_provided"
+                "source": existing_info.get("source", "user_provided")
             }
             if not dry_run:
                 with open(cdir / "character.json", "w", encoding="utf-8") as f:
                     json.dump(char_info, f, ensure_ascii=False, indent=2)
             report["characters"].append(char_info)
+            # Remove from existing_chars_by_name so we don't duplicate
+            existing_chars_by_name.pop(char_name, None)
+
+        # PRESERVE all other existing characters in workspace that weren't overridden in char_refs_arg
+        for remaining_name, (rem_cdir, rem_info) in existing_chars_by_name.items():
+            rem_disk_imgs = find_reference_images(rem_cdir)
+            rem_existing_imgs = rem_info.get("images", [])
+            rem_ordered_imgs = [img for img in rem_existing_imgs if (rem_cdir / img).is_file()]
+            for di in rem_disk_imgs:
+                if di not in rem_ordered_imgs:
+                    rem_ordered_imgs.append(di)
+            rem_char_info = {
+                "name": remaining_name,
+                "role": rem_info.get("role", "Character"),
+                "visual_dna": rem_info.get("visual_dna", f"Character {remaining_name}"),
+                "portrait_prompt": rem_info.get("portrait_prompt", f"Portrait of {remaining_name}"),
+                "images": rem_ordered_imgs if rem_ordered_imgs else rem_disk_imgs,
+                "source": rem_info.get("source", "collected")
+            }
+            report["characters"].append(rem_char_info)
     else:
         existing_char_dirs = [d for d in workspace.char_ref_dir.iterdir() if d.is_dir()] if workspace.char_ref_dir.exists() else []
         if existing_char_dirs and not force:
@@ -1702,7 +1751,12 @@ def setup_workspace_assets(
                             if verbose:
                                 print(f"  -> Successfully generated character reference: {ref_img_path}")
 
-                c_info["images"] = disk_imgs
+                existing_imgs = c_info.get("images", [])
+                ordered_imgs = [img for img in existing_imgs if (cdir / img).is_file()]
+                for di in disk_imgs:
+                    if di not in ordered_imgs:
+                        ordered_imgs.append(di)
+                c_info["images"] = ordered_imgs if ordered_imgs else disk_imgs
                 if not dry_run and cinfo_path.parent.exists():
                     with open(cinfo_path, "w", encoding="utf-8") as f:
                         json.dump(c_info, f, ensure_ascii=False, indent=2)
@@ -1789,7 +1843,7 @@ def setup_workspace_assets(
             src_path = Path(src_path_str)
             dest_file = workspace.style_ref_dir / src_path.name
             if src_path.exists():
-                if not dry_run:
+                if not dry_run and src_path.resolve() != dest_file.resolve():
                     shutil.copy2(src_path, dest_file)
                 saved_style_imgs.append(dest_file.name)
                 if verbose:
@@ -1860,7 +1914,12 @@ def setup_workspace_assets(
                         if verbose:
                             print(f"  -> Successfully generated style reference: {ref_style_img}")
 
-            s_data["images"] = disk_style_imgs
+            existing_s_imgs = s_data.get("images", [])
+            ordered_s_imgs = [img for img in existing_s_imgs if (workspace.style_ref_dir / img).is_file()]
+            for dsi in disk_style_imgs:
+                if dsi not in ordered_s_imgs:
+                    ordered_s_imgs.append(dsi)
+            s_data["images"] = ordered_s_imgs if ordered_s_imgs else disk_style_imgs
             if not dry_run and style_json_path.parent.exists():
                 with open(style_json_path, "w", encoding="utf-8") as f:
                     json.dump(s_data, f, ensure_ascii=False, indent=2)
@@ -2482,8 +2541,16 @@ def resolve_tag_references(
             list(workspace.style_ref_dir.glob("*.jpeg"))
         )
         if candidates:
-            style_img_path = candidates[0]
-            style_img_name = style_img_path.name
+            if active_style.get("images"):
+                for pref in active_style["images"]:
+                    matched = next((c for c in candidates if c.name == pref), None)
+                    if matched:
+                        style_img_path = matched
+                        style_img_name = matched.name
+                        break
+            if not style_img_path:
+                style_img_path = candidates[0]
+                style_img_name = style_img_path.name
 
     style_ref_info = None
     if style_img_path:
@@ -2514,8 +2581,28 @@ def resolve_tag_references(
                     list(c_dir.glob("*.jpeg"))
                 )
                 if c_candidates:
-                    c_img_path = c_candidates[0]
-                    c_img_name = c_img_path.name
+                    # First check c_dir / "character.json" for authoritative image preference
+                    pref_list = []
+                    c_json_p = c_dir / "character.json"
+                    if c_json_p.exists():
+                        try:
+                            with open(c_json_p, "r", encoding="utf-8") as f:
+                                pref_list = json.load(f).get("images", [])
+                        except Exception:
+                            pass
+                    if not pref_list:
+                        pref_list = ch.get("images", [])
+
+                    if pref_list:
+                        for pref in pref_list:
+                            matched = next((c for c in c_candidates if c.name == pref), None)
+                            if matched:
+                                c_img_path = matched
+                                c_img_name = matched.name
+                                break
+                    if not c_img_path:
+                        c_img_path = c_candidates[0]
+                        c_img_name = c_img_path.name
 
         if not c_img_path and ch.get("images"):
             c_img_name = ch["images"][0]
@@ -2587,7 +2674,8 @@ def generate_media_assets(
     dry_run: bool = False,
     verbose: bool = False,
     workspace: Optional[StoryWorkspace] = None,
-    extra_prompt: Optional[str] = None
+    extra_prompt: Optional[str] = None,
+    char_refs: Optional[Dict[str, List[str]]] = None
 ) -> Tuple[str, int]:
     """
     Extracts pending tags with prompts, generates image and video assets using Google GenAI / gemini-image.py,
@@ -2654,6 +2742,47 @@ def generate_media_assets(
                 workspace_chars = c_idx.get("characters", [])
         except Exception:
             pass
+
+    # Ensure all character subdirectories are represented even if omitted in characters.json
+    if workspace and workspace.char_ref_dir.exists():
+        for cd in sorted(workspace.char_ref_dir.iterdir()):
+            if cd.is_dir() and not any(c.get("name") == cd.name for c in workspace_chars):
+                c_json_p = cd / "character.json"
+                c_data = {}
+                if c_json_p.exists():
+                    try:
+                        with open(c_json_p, "r", encoding="utf-8") as f:
+                            c_data = json.load(f)
+                    except Exception:
+                        pass
+                disk_imgs = find_reference_images(cd)
+                workspace_chars.append({
+                    "name": cd.name,
+                    "role": c_data.get("role", "Character"),
+                    "visual_dna": c_data.get("visual_dna", f"Character {cd.name}"),
+                    "portrait_prompt": c_data.get("portrait_prompt", f"Portrait of {cd.name}"),
+                    "images": c_data.get("images") or disk_imgs,
+                    "source": c_data.get("source", "collected")
+                })
+
+    # Prioritize user-provided char_refs
+    if char_refs:
+        for cname, img_paths in char_refs.items():
+            matched = next((c for c in workspace_chars if c.get("name") == cname), None)
+            pref_file_names = [Path(p).name for p in img_paths]
+            if matched:
+                existing_imgs = matched.get("images", [])
+                ordered = [x for x in pref_file_names if x in existing_imgs] + [x for x in existing_imgs if x not in pref_file_names]
+                matched["images"] = ordered if ordered else pref_file_names
+            else:
+                workspace_chars.append({
+                    "name": cname,
+                    "role": "User Specified",
+                    "visual_dna": f"Character {cname}",
+                    "portrait_prompt": f"Portrait of {cname}",
+                    "images": pref_file_names,
+                    "source": "user_provided"
+                })
 
     # Load workspace generation settings & per-scene overrides if available
     ws_settings = {}
@@ -3970,7 +4099,8 @@ def main():
                 api_key=args.api_key,
                 dry_run=args.dry_run,
                 workspace=workspace,
-                extra_prompt=getattr(args, "extra_prompt", None)
+                extra_prompt=getattr(args, "extra_prompt", None),
+                char_refs=char_refs_arg
             )
             target_out = args.output or (args.input_file if args.in_place else str(workspace.output_md))
             if not args.dry_run or args.output or args.in_place:
@@ -4029,7 +4159,8 @@ def main():
             style_prompt=getattr(args, "style_prompt", None),
             api_key=getattr(args, "api_key", None),
             dry_run=getattr(args, "dry_run", False),
-            workspace=workspace
+            workspace=workspace,
+            char_refs=char_refs_arg
         )
 
         target_out = args.output or (args.input_file if args.in_place else str(workspace.output_md))

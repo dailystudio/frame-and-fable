@@ -139,6 +139,24 @@ export async function deleteReferenceImage(stem, { type, characterName, filename
   return await res.json();
 }
 
+export async function selectReferenceImage(stem, { type, characterName, assetPath, filename }) {
+  const res = await fetch(`/api/workspace/${encodeURIComponent(stem)}/select-ref`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type,
+      character_name: characterName,
+      asset_path: assetPath,
+      filename
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to select reference asset: ${res.statusText}`);
+  }
+  return await res.json();
+}
+
 export function getGenerationSettings() {
   try {
     const raw = localStorage.getItem('storybook_gen_settings');

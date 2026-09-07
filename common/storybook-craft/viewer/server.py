@@ -13,6 +13,7 @@ import mimetypes
 import webbrowser
 import base64
 import subprocess
+import shutil
 import threading
 import time
 import uuid
@@ -222,6 +223,13 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             sub = pathname[len("/api/workspace/"):]
             stem = sub[:sub.index(delete_marker)]
             self.handle_api_delete_ref(stem)
+            return
+
+        select_ref_marker = "/select-ref"
+        if select_ref_marker in pathname and pathname.startswith("/api/workspace/"):
+            sub = pathname[len("/api/workspace/"):]
+            stem = sub[:sub.index(select_ref_marker)]
+            self.handle_api_select_ref(stem)
             return
 
         generate_marker = "/generate"
@@ -517,18 +525,23 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                             except Exception:
                                 pass
 
+                        preferred_imgs = c_json.get("images") or (existing.get("images") if existing else None) or imgs
+                        ordered = [x for x in preferred_imgs if (cd / x).is_file()]
+                        for img_f in imgs:
+                            if img_f not in ordered:
+                                ordered.append(img_f)
+
                         if not existing:
                             characters.append({
                                 "name": cd.name,
                                 "role": c_json.get("role", "Character"),
                                 "visual_dna": c_json.get("visual_dna", ""),
                                 "portrait_prompt": c_json.get("portrait_prompt", ""),
-                                "images": imgs,
+                                "images": ordered,
                                 "source": c_json.get("source", "collected")
                             })
                         else:
-                            if not existing.get("images"):
-                                existing["images"] = imgs
+                            existing["images"] = ordered
                             if not existing.get("visual_dna") and c_json.get("visual_dna"):
                                 existing["visual_dna"] = c_json.get("visual_dna")
                             if not existing.get("portrait_prompt") and c_json.get("portrait_prompt"):
@@ -555,8 +568,13 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     f.name for f in sorted(style_dir.iterdir())
                     if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
                 ]
-                if style_imgs and not style.get("images"):
-                    style["images"] = style_imgs
+                if style_imgs:
+                    current_s_imgs = style.get("images", [])
+                    filtered = [x for x in current_s_imgs if (style_dir / x).exists()]
+                    for img_f in style_imgs:
+                        if img_f not in filtered:
+                            filtered.append(img_f)
+                    style["images"] = filtered
 
             # Generated Media
             generated_images = []
@@ -1023,6 +1041,200 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
 
+    def handle_api_select_ref(self, stem):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            payload = json.loads(body.decode("utf-8")) if body else {}
+
+            ref_type = payload.get("type", "style")  # "style" or "character"
+            char_name = payload.get("character_name", "").strip()
+            asset_path = payload.get("asset_path", "").strip()
+            filename = payload.get("filename", "").strip()
+
+            ws_dir = self.outputs_dir / stem
+            if not ws_dir.exists():
+                self.send_json_response({"error": f"Workspace '{stem}' not found"}, status=404)
+                return
+
+            # Clean asset_path if it's a URL
+            if "/api/asset/" in asset_path:
+                parts = asset_path.split("/api/asset/")[1].split("?")[0].split("/")
+                if len(parts) > 1:
+                    asset_path = "/".join(parts[1:])
+
+            if ref_type == "style":
+                style_dir = ws_dir / "style-ref"
+                style_dir.mkdir(parents=True, exist_ok=True)
+                final_filename = filename
+
+                # 1. Check if file is already inside style-ref
+                src_file = None
+                if final_filename and (style_dir / final_filename).is_file():
+                    src_file = style_dir / final_filename
+                elif asset_path:
+                    cand = ws_dir / asset_path
+                    if cand.exists() and cand.is_file():
+                        src_file = cand
+                        final_filename = final_filename or src_file.name
+
+                if not src_file and final_filename:
+                    # Check images directory only
+                    if (ws_dir / "images" / final_filename).is_file():
+                        src_file = ws_dir / "images" / final_filename
+
+                if not src_file:
+                    self.send_json_response({"error": f"Asset file '{asset_path or filename}' not found for style reference"}, status=404)
+                    return
+
+                dst_file = style_dir / final_filename
+                if src_file.resolve() != dst_file.resolve():
+                    shutil.copy2(src_file, dst_file)
+
+                # Update style.json
+                s_json_file = style_dir / "style.json"
+                s_data = {}
+                if s_json_file.exists():
+                    try:
+                        with open(s_json_file, "r", encoding="utf-8") as f:
+                            s_data = json.load(f)
+                    except Exception:
+                        pass
+                imgs = s_data.get("images", [])
+                if final_filename in imgs:
+                    imgs.remove(final_filename)
+                imgs.insert(0, final_filename)
+                s_data["images"] = imgs
+
+                with open(s_json_file, "w", encoding="utf-8") as f:
+                    json.dump(s_data, f, ensure_ascii=False, indent=2)
+
+                asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
+                self.send_json_response({
+                    "success": True,
+                    "message": f"Successfully selected '{final_filename}' as style reference",
+                    "filename": final_filename,
+                    "assetUrl": asset_url,
+                    "type": "style"
+                })
+
+            elif ref_type == "character":
+                if not char_name:
+                    self.send_json_response({"error": "character_name is required for character reference"}, status=400)
+                    return
+
+                char_dir = ws_dir / "char-ref" / char_name
+                char_dir.mkdir(parents=True, exist_ok=True)
+                final_filename = filename
+
+                # 1. Check if the file is ALREADY inside this specific character's directory!
+                # (E.g. selecting ref_002.jpeg when switching from ref_001.png)
+                src_file = None
+                if final_filename and (char_dir / final_filename).is_file():
+                    src_file = char_dir / final_filename
+                elif asset_path:
+                    # Clean relative asset path
+                    cand = ws_dir / asset_path
+                    if cand.exists() and cand.is_file():
+                        # Protect against cross-character file copying collisions
+                        if "char-ref" in str(cand) and char_name not in str(cand):
+                            # Sibling character reference file: do NOT overwrite ref_001/ref_002 blindly
+                            final_filename = f"{cand.parent.name}_{cand.name}"
+                        src_file = cand
+                        final_filename = final_filename or src_file.name
+
+                if not src_file and final_filename:
+                    # Fallback check images folder ONLY (never rglob across all character folders!)
+                    if (ws_dir / "images" / final_filename).is_file():
+                        src_file = ws_dir / "images" / final_filename
+
+                if not src_file:
+                    self.send_json_response({"error": f"Asset file '{asset_path or filename}' not found for character '{char_name}'"}, status=404)
+                    return
+
+                dst_file = char_dir / final_filename
+                # Only copy if source is different from destination
+                if src_file.resolve() != dst_file.resolve():
+                    shutil.copy2(src_file, dst_file)
+
+                # Update character.json preserving existing metadata
+                c_json_file = char_dir / "character.json"
+                c_data = {}
+                if c_json_file.exists():
+                    try:
+                        with open(c_json_file, "r", encoding="utf-8") as f:
+                            c_data = json.load(f)
+                    except Exception:
+                        pass
+                if not c_data:
+                    c_data = {
+                        "name": char_name,
+                        "role": "Character",
+                        "visual_dna": f"Character {char_name}",
+                        "portrait_prompt": f"Portrait of {char_name}",
+                        "source": "collected"
+                    }
+                imgs = c_data.get("images", [])
+                if final_filename in imgs:
+                    imgs.remove(final_filename)
+                imgs.insert(0, final_filename)
+                # Ensure all other disk images in char_dir are in the list
+                for f in sorted(char_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                        if f.name not in imgs:
+                            imgs.append(f.name)
+                c_data["images"] = imgs
+                with open(c_json_file, "w", encoding="utf-8") as f:
+                    json.dump(c_data, f, ensure_ascii=False, indent=2)
+
+                # Update characters.json, PRESERVING all other characters
+                all_chars_file = ws_dir / "char-ref" / "characters.json"
+                chars_meta = {"characters": []}
+                if all_chars_file.exists():
+                    try:
+                        with open(all_chars_file, "r", encoding="utf-8") as f:
+                            chars_meta = json.load(f)
+                    except Exception:
+                        chars_meta = {"characters": []}
+
+                found_in_meta = False
+                for c in chars_meta.get("characters", []):
+                    if c.get("name") == char_name:
+                        found_in_meta = True
+                        c_imgs = c.get("images", [])
+                        if final_filename in c_imgs:
+                            c_imgs.remove(final_filename)
+                        c_imgs.insert(0, final_filename)
+                        for f_name in imgs:
+                            if f_name not in c_imgs:
+                                c_imgs.append(f_name)
+                        c["images"] = c_imgs
+                        if not c.get("visual_dna") and c_data.get("visual_dna"):
+                            c["visual_dna"] = c_data.get("visual_dna")
+                        if not c.get("portrait_prompt") and c_data.get("portrait_prompt"):
+                            c["portrait_prompt"] = c_data.get("portrait_prompt")
+
+                if not found_in_meta:
+                    chars_meta.setdefault("characters", []).append(c_data)
+
+                with open(all_chars_file, "w", encoding="utf-8") as f:
+                    json.dump(chars_meta, f, ensure_ascii=False, indent=2)
+
+                asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
+                self.send_json_response({
+                    "success": True,
+                    "message": f"Successfully selected '{final_filename}' as reference photo for '{char_name}'",
+                    "filename": final_filename,
+                    "assetUrl": asset_url,
+                    "type": "character",
+                    "character_name": char_name
+                })
+            else:
+                self.send_json_response({"error": f"Unknown reference type '{ref_type}'"}, status=400)
+
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
+
     def start_generation_task(self, stem: str, payload: dict) -> dict:
         tag_id = payload.get("tag_id")
         section = payload.get("section")
@@ -1112,6 +1324,124 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         except Exception:
             pass
 
+        # Resolve reference images used for this generation task
+        ref_images_used = {
+            "style": None,
+            "characters": []
+        }
+
+        # Style reference
+        style_dir = ws_dir / "style-ref"
+        style_img_file = None
+        if style_dir.exists():
+            s_json_file = style_dir / "style.json"
+            s_imgs = []
+            if s_json_file.exists():
+                try:
+                    with open(s_json_file, "r", encoding="utf-8") as sf:
+                        s_imgs = json.load(sf).get("images", [])
+                except Exception:
+                    pass
+            for candidate_img in s_imgs:
+                if (style_dir / candidate_img).is_file():
+                    style_img_file = style_dir / candidate_img
+                    break
+            if not style_img_file:
+                for f in sorted(style_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                        style_img_file = f
+                        break
+        if style_img_file:
+            ref_images_used["style"] = style_img_file.name
+            try:
+                rel_style = str(style_img_file.relative_to(PROJECT_ROOT))
+            except Exception:
+                rel_style = str(style_img_file)
+            cmd.extend(["--style-image", rel_style])
+
+        # Character references (matched by tag context/prompt)
+        char_dir = ws_dir / "char-ref"
+        all_chars = []
+        chars_json = char_dir / "characters.json"
+        if chars_json.exists():
+            try:
+                with open(chars_json, "r", encoding="utf-8") as cf:
+                    all_chars = json.load(cf).get("characters", [])
+            except Exception:
+                pass
+
+        # Fallback: scan character subdirectories in char_dir to never miss characters
+        if char_dir.exists():
+            for cd in sorted(char_dir.iterdir()):
+                if cd.is_dir() and not any(c.get("name") == cd.name for c in all_chars):
+                    c_json_path = cd / "character.json"
+                    c_info = {}
+                    if c_json_path.exists():
+                        try:
+                            with open(c_json_path, "r", encoding="utf-8") as cf:
+                                c_info = json.load(cf)
+                        except Exception:
+                            pass
+                    all_chars.append({
+                        "name": cd.name,
+                        "role": c_info.get("role", "Character"),
+                        "visual_dna": c_info.get("visual_dna", ""),
+                        "portrait_prompt": c_info.get("portrait_prompt", ""),
+                        "images": c_info.get("images", []),
+                        "source": c_info.get("source", "collected")
+                    })
+
+        matching_tag = None
+        if tag_prompt:
+            matching_tag = {"id": tag_id, "prompt": tag_prompt, "type": media_type}
+        elif tag_id:
+            matching_tag = {"id": tag_id, "prompt": payload.get("prompt", ""), "type": media_type}
+
+        matched_characters = []
+        if matching_tag:
+            if match_characters_for_tag:
+                matched_characters = match_characters_for_tag(matching_tag, all_chars)
+            else:
+                for ch in all_chars:
+                    cname = ch.get("name", "")
+                    if cname and (cname in matching_tag.get("prompt", "") or cname in matching_tag.get("context_hint", "")):
+                        matched_characters.append(ch)
+
+        for ch in matched_characters:
+            cname = ch.get("name", "")
+            cd = char_dir / cname
+            c_img_file = None
+            c_json_path = cd / "character.json"
+            preferred_c_imgs = []
+            if c_json_path.exists():
+                try:
+                    with open(c_json_path, "r", encoding="utf-8") as cjf:
+                        preferred_c_imgs = json.load(cjf).get("images", [])
+                except Exception:
+                    pass
+            if not preferred_c_imgs:
+                preferred_c_imgs = ch.get("images", [])
+            for c_cand in preferred_c_imgs:
+                if (cd / c_cand).is_file():
+                    c_img_file = cd / c_cand
+                    break
+            if not c_img_file and cd.exists():
+                for f in sorted(cd.iterdir()):
+                    if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                        c_img_file = f
+                        break
+            if c_img_file:
+                ref_images_used["characters"].append({
+                    "name": cname,
+                    "image": c_img_file.name,
+                    "asset_url": f"/api/asset/{stem}/char-ref/{cname}/{c_img_file.name}"
+                })
+                try:
+                    rel_char_img = str(c_img_file.relative_to(PROJECT_ROOT))
+                except Exception:
+                    rel_char_img = str(c_img_file)
+                cmd.extend(["--char-refs", f"{cname}:{rel_char_img}"])
+
         task_id = f"task_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         now_iso = datetime.now().isoformat()
 
@@ -1126,6 +1456,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             "ratio": effective_ratio,
             "size": effective_size,
             "extra_prompt": extra_prompt,
+            "ref_images": ref_images_used,
             "status": "running",
             "started_at": now_iso,
             "finished_at": None,
@@ -1142,13 +1473,18 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         def worker():
             start_t = time.time()
             try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 self.task_manager._running_procs[task_id] = proc
                 stdout, stderr = proc.communicate()
                 self.task_manager._running_procs.pop(task_id, None)
 
                 duration = round(time.time() - start_t, 2)
                 finished_iso = datetime.now().isoformat()
+
+                attached_refs = []
+                m_refs = re.search(r'Attached Reference Images \((\d+)\):\s*([^\n]+)', stdout)
+                if m_refs:
+                    attached_refs = [x.strip() for x in m_refs.group(2).split(",") if x.strip()]
 
                 # Check if asset was produced
                 asset_url = None
@@ -1169,7 +1505,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                         "stdout": stdout,
                         "stderr": stderr,
                         "duration_sec": duration,
-                        "finished_at": finished_iso
+                        "finished_at": finished_iso,
+                        "attached_ref_images": attached_refs
                     })
                 else:
                     self.task_manager.update_task(self.outputs_dir, stem, task_id, {
@@ -1179,7 +1516,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                         "stderr": stderr,
                         "duration_sec": duration,
                         "finished_at": finished_iso,
-                        "asset_url": asset_url
+                        "asset_url": asset_url,
+                        "attached_ref_images": attached_refs
                     })
             except Exception as ex:
                 self.task_manager._running_procs.pop(task_id, None)
