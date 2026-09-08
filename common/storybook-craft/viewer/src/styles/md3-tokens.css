@@ -1,4 +1,8 @@
 /* Clean, Clear, Modern Design System Tokens */
+html {
+  scrollbar-gutter: stable;
+}
+
 :root {
   /* Typography - Modern, high-legibility font stack for English & CJK (Apple PingFang SC, Microsoft YaHei) */
   --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;

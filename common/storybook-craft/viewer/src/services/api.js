@@ -139,7 +139,7 @@ export async function deleteReferenceImage(stem, { type, characterName, filename
   return await res.json();
 }
 
-export async function selectReferenceImage(stem, { type, characterName, assetPath, filename, tagId, scope, action }) {
+export async function selectReferenceImage(stem, { type, characterName, assetPath, filename, tagId, section, scope, action }) {
   const res = await fetch(`/api/workspace/${encodeURIComponent(stem)}/select-ref`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -149,6 +149,7 @@ export async function selectReferenceImage(stem, { type, characterName, assetPat
       asset_path: assetPath,
       filename,
       tag_id: tagId,
+      section,
       scope,
       action
     })
@@ -160,11 +161,13 @@ export async function selectReferenceImage(stem, { type, characterName, assetPat
   return await res.json();
 }
 
-export async function resetReferenceImage(stem, { type, characterName, tagId }) {
+export async function resetReferenceImage(stem, { type, characterName, tagId, section, scope }) {
   return selectReferenceImage(stem, {
     type,
     characterName,
     tagId,
+    section,
+    scope,
     action: 'reset'
   });
 }

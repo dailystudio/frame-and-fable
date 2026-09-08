@@ -109,9 +109,9 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue';
 import { marked } from 'marked';
-import { isTagGenerating, runTagGeneration } from '../services/api';
+import { isTagGenerating, runTagGeneration, onGenerationComplete, generationState } from '../services/api';
 import '../styles/markdown.css';
 
 const props = defineProps({
@@ -147,6 +147,27 @@ const showRaw = ref(false);
 const rawCopied = ref(false);
 const fontSizeMultiplier = ref(1.0);
 
+const activeGeneratingTags = ref(new Set());
+const generationVersion = ref(0);
+
+let unsubGen = null;
+onMounted(() => {
+  unsubGen = onGenerationComplete((err, payload) => {
+    if (payload?.tagId) {
+      activeGeneratingTags.value.delete(payload.tagId);
+      generationVersion.value++;
+    }
+  });
+});
+
+onBeforeUnmount(() => {
+  if (unsubGen) unsubGen();
+});
+
+watch(() => Object.keys(generationState.activeMap).length, () => {
+  generationVersion.value++;
+});
+
 const wordCount = computed(() => {
   if (!props.markdownContent) return 0;
   return props.markdownContent.trim().split(/\s+/).length;
@@ -158,6 +179,8 @@ const readTime = computed(() => {
 
 const renderedHtml = computed(() => {
   if (!props.markdownContent) return '';
+  const _v = generationVersion.value;
+  const _activeMap = generationState.activeMap;
 
   let text = props.markdownContent;
 
@@ -230,7 +253,7 @@ const renderedHtml = computed(() => {
       }
 
       const isGenerated = !!matched;
-      const isGeneratingTag = isTagGenerating(props.stem, tagId);
+      const isGeneratingTag = activeGeneratingTags.value.has(tagId) || isTagGenerating(props.stem, tagId);
 
       // Character chips if characters are matched
       const charChipsHtml = (enriched?.character_refs || []).map(c =>
@@ -414,6 +437,24 @@ function handleContentClick(event) {
 
     // Direct inline button action (Generate Scene or Regenerate Scene)
     if (isAutoGenerate) {
+      actionTarget.disabled = true;
+      const spanText = actionTarget.querySelector('span:not(.material-symbols-rounded)');
+      const icon = actionTarget.querySelector('.material-symbols-rounded');
+      if (spanText) spanText.textContent = 'Generating...';
+      if (icon) {
+        icon.textContent = 'sync';
+        icon.classList.add('is-spinning');
+      }
+      const sideGroup = actionTarget.closest('.scene-top-right, .placeholder-side');
+      const statusBadge = sideGroup?.querySelector('.status-badge');
+      if (statusBadge) {
+        statusBadge.className = 'status-badge status-generating';
+        statusBadge.innerHTML = '<span class="material-symbols-rounded is-spinning">sync</span> Generating...';
+      }
+
+      activeGeneratingTags.value.add(tagId);
+      generationVersion.value++;
+
       runTagGeneration(props.stem, { tagId, section: tagSection, type: tagType });
       return;
     }

@@ -81,6 +81,7 @@ DEFAULT_SETTINGS = {
             "duration": "5s"
         }
     },
+    "sections": {},
     "scenes": {}
 }
 
@@ -364,6 +365,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                             res["global"]["image"].update(loaded["global"]["image"])
                         if "video" in loaded["global"] and isinstance(loaded["global"]["video"], dict):
                             res["global"]["video"].update(loaded["global"]["video"])
+                    if "sections" in loaded and isinstance(loaded["sections"], dict):
+                        res["sections"] = loaded["sections"]
                     if "scenes" in loaded and isinstance(loaded["scenes"], dict):
                         res["scenes"] = loaded["scenes"]
             except Exception as e:
@@ -382,6 +385,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     current["global"]["image"].update(data["global"]["image"])
                 if "video" in data["global"] and isinstance(data["global"]["video"], dict):
                     current["global"]["video"].update(data["global"]["video"])
+            if "sections" in data and isinstance(data["sections"], dict):
+                current["sections"] = data["sections"]
             if "scenes" in data and isinstance(data["scenes"], dict):
                 current["scenes"] = data["scenes"]
 
@@ -673,10 +678,12 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             all_generated = generated_images + generated_videos
             ws_settings = self.load_workspace_settings(stem)
             scenes_cfg = ws_settings.get("scenes", {})
+            sections_cfg = ws_settings.get("sections", {})
+
             tags = []
             for rt in raw_tags:
                 tag_id = rt.get("id", "")
-                tag_type = rt.get("type", "image")
+                tag_type = rt.get("type", "image").lower()
                 matched = next((
                     a for a in all_generated
                     if a["id"] == tag_id or
@@ -687,15 +694,15 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
 
                 rt_clean = {k: v for k, v in rt.items() if not k.startswith("_")}
                 rt_clean["type"] = tag_type
-                rt_clean["section"] = rt_clean.get("section") or rt_clean.get("title") or "Story Scene"
+                tag_section = rt_clean.get("section") or rt_clean.get("title") or "Story Scene"
+                rt_clean["section"] = tag_section
                 rt_clean["prompt"] = rt_clean.get("prompt", "")
                 rt_clean["context_hint"] = rt_clean.get("context_hint", "")
                 rt_clean["isGenerated"] = matched is not None
                 rt_clean["matchedAsset"] = matched
 
                 scene_cfg = scenes_cfg.get(tag_id, {})
-                scene_char_refs = scene_cfg.get("character_refs", {})
-                scene_style_ref = scene_cfg.get("style_ref")
+                section_cfg = sections_cfg.get(tag_section, {})
 
                 # Match character references
                 matched_chars = []
@@ -712,12 +719,24 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     cname = ch.get("name", "")
                     imgs = ch.get("images", [])
                     c_img = imgs[0] if imgs else None
-                    is_char_override = False
-                    if cname in scene_char_refs:
-                        override_val = scene_char_refs[cname]
+                    char_override_scope = None
+
+                    # 1. Check tag-level override first!
+                    tag_char_refs = scene_cfg.get("character_refs", {})
+                    if cname in tag_char_refs:
+                        override_val = tag_char_refs[cname]
                         if (ws_dir / "char-ref" / cname / override_val).is_file():
                             c_img = override_val
-                            is_char_override = True
+                            char_override_scope = "tag"
+
+                    # 2. Check scene/section-level override!
+                    if not char_override_scope and tag_section:
+                        sec_char_refs = section_cfg.get("character_refs", {})
+                        if cname in sec_char_refs:
+                            sec_override_val = sec_char_refs[cname]
+                            if (ws_dir / "char-ref" / cname / sec_override_val).is_file():
+                                c_img = sec_override_val
+                                char_override_scope = "scene"
 
                     char_refs_data.append({
                         "name": cname,
@@ -726,24 +745,33 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                         "visual_dna": ch.get("visual_dna", ""),
                         "image": c_img,
                         "assetUrl": f"/api/asset/{stem}/char-ref/{cname}/{c_img}" if c_img else None,
-                        "is_scene_override": is_char_override,
-                        "role_guide": f"Character Identity Reference: {cname} (Context Matched)"
+                        "is_scene_override": char_override_scope is not None,
+                        "override_scope": char_override_scope,
+                        "role_guide": f"Character Identity Reference: {cname} ({'Tag Override' if char_override_scope == 'tag' else ('Scene Override' if char_override_scope == 'scene' else 'Context Matched')})"
                     })
 
-                # Style Reference (check per-scene override)
+                # Style Reference (check tag override > section override > global)
                 style_imgs = style.get("images", [])
                 style_img = style_imgs[0] if style_imgs else None
-                is_style_override = False
-                if scene_style_ref and (ws_dir / "style-ref" / scene_style_ref).is_file():
-                    style_img = scene_style_ref
-                    is_style_override = True
+                style_override_scope = None
+
+                tag_style_ref = scene_cfg.get("style_ref")
+                if tag_style_ref and (ws_dir / "style-ref" / tag_style_ref).is_file():
+                    style_img = tag_style_ref
+                    style_override_scope = "tag"
+                elif tag_section:
+                    sec_style_ref = section_cfg.get("style_ref")
+                    if sec_style_ref and (ws_dir / "style-ref" / sec_style_ref).is_file():
+                        style_img = sec_style_ref
+                        style_override_scope = "scene"
 
                 style_ref_data = {
                     "name": style_img,
                     "assetUrl": f"/api/asset/{stem}/style-ref/{style_img}" if style_img else None,
                     "style_name": style.get("style_name", "Art Style"),
                     "style_prompt": style.get("style_prompt", ""),
-                    "is_scene_override": is_style_override,
+                    "is_scene_override": style_override_scope is not None,
+                    "override_scope": style_override_scope,
                     "role": "Style Reference (Always Active)"
                 } if style_img else None
 
@@ -1084,36 +1112,16 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             asset_path = payload.get("asset_path", "").strip()
             filename = (payload.get("filename") or payload.get("image_name") or "").strip()
             tag_id = payload.get("tag_id", "").strip()
-            scope = payload.get("scope", "scene" if tag_id else "global")
+            section = payload.get("section", "").strip()
+            # 3 scopes: "tag" | "scene" | "global"
+            scope = payload.get("scope")
+            if not scope:
+                scope = "tag" if tag_id else ("scene" if section else "global")
             action = payload.get("action", "select")
 
             ws_dir = self.outputs_dir / stem
             if not ws_dir.exists():
                 self.send_json_response({"error": f"Workspace '{stem}' not found"}, status=404)
-                return
-
-            # Handle reset action (reverts a scene override back to workspace default)
-            if action == "reset":
-                if not tag_id:
-                    self.send_json_response({"error": "tag_id is required to reset reference override"}, status=400)
-                    return
-                current_settings = self.load_workspace_settings(stem)
-                if "scenes" in current_settings and tag_id in current_settings["scenes"]:
-                    scene_entry = current_settings["scenes"][tag_id]
-                    if ref_type == "character":
-                        if "character_refs" in scene_entry:
-                            scene_entry["character_refs"].pop(char_name, None)
-                    elif ref_type == "style":
-                        scene_entry.pop("style_ref", None)
-                    self.save_workspace_settings(stem, current_settings)
-                self.send_json_response({
-                    "success": True,
-                    "action": "reset",
-                    "tag_id": tag_id,
-                    "character_name": char_name,
-                    "type": ref_type,
-                    "message": f"Successfully reset reference override for {char_name or 'style'} on scene {tag_id}"
-                })
                 return
 
             # Clean asset_path if it's a URL
@@ -1122,25 +1130,65 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if len(parts) > 1:
                     asset_path = "/".join(parts[1:])
 
+            # Handle reset action
+            if action == "reset":
+                current_settings = self.load_workspace_settings(stem)
+                reset_done = False
+
+                if scope == "tag" or (not scope and tag_id):
+                    if tag_id and "scenes" in current_settings and tag_id in current_settings["scenes"]:
+                        scene_entry = current_settings["scenes"][tag_id]
+                        if ref_type == "character":
+                            if "character_refs" in scene_entry and char_name in scene_entry["character_refs"]:
+                                scene_entry["character_refs"].pop(char_name, None)
+                                reset_done = True
+                        elif ref_type == "style":
+                            if "style_ref" in scene_entry:
+                                scene_entry.pop("style_ref", None)
+                                reset_done = True
+
+                if not reset_done and (scope == "scene" or (not scope and section)):
+                    if section and "sections" in current_settings and section in current_settings["sections"]:
+                        sec_entry = current_settings["sections"][section]
+                        if ref_type == "character":
+                            if "character_refs" in sec_entry and char_name in sec_entry["character_refs"]:
+                                sec_entry["character_refs"].pop(char_name, None)
+                                reset_done = True
+                        elif ref_type == "style":
+                            if "style_ref" in sec_entry:
+                                sec_entry.pop("style_ref", None)
+                                reset_done = True
+
+                self.save_workspace_settings(stem, current_settings)
+                self.send_json_response({
+                    "success": True,
+                    "action": "reset",
+                    "tag_id": tag_id,
+                    "section": section,
+                    "character_name": char_name,
+                    "type": ref_type,
+                    "message": f"Successfully reset reference override for {char_name or 'style'}"
+                })
+                return
+
             if ref_type == "style":
                 style_dir = ws_dir / "style-ref"
                 style_dir.mkdir(parents=True, exist_ok=True)
                 final_filename = filename
 
-                # 1. Check if file is already inside style-ref
+                # 1. Check asset_path first
                 src_file = None
-                if final_filename and (style_dir / final_filename).is_file():
-                    src_file = style_dir / final_filename
-                elif asset_path:
+                if asset_path:
                     cand = ws_dir / asset_path
                     if cand.exists() and cand.is_file():
                         src_file = cand
                         final_filename = final_filename or src_file.name
 
-                if not src_file and final_filename:
-                    # Check images directory only
-                    if (ws_dir / "images" / final_filename).is_file():
-                        src_file = ws_dir / "images" / final_filename
+                if not src_file and final_filename and (style_dir / final_filename).is_file():
+                    src_file = style_dir / final_filename
+
+                if not src_file and final_filename and (ws_dir / "images" / final_filename).is_file():
+                    src_file = ws_dir / "images" / final_filename
 
                 if not src_file:
                     self.send_json_response({"error": f"Asset file '{asset_path or filename}' not found for style reference"}, status=404)
@@ -1150,20 +1198,43 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if src_file.resolve() != dst_file.resolve():
                     shutil.copy2(src_file, dst_file)
 
-                # Scope: Scene only vs Global
-                if scope == "scene" and tag_id:
+                # Scope: Tag vs Scene vs Global
+                if scope == "tag" and tag_id:
                     current_settings = self.load_workspace_settings(stem)
                     current_settings.setdefault("scenes", {}).setdefault(tag_id, {})["style_ref"] = final_filename
                     self.save_workspace_settings(stem, current_settings)
                     asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
                     self.send_json_response({
                         "success": True,
-                        "message": f"Successfully selected '{final_filename}' as style reference for scene '{tag_id}'",
+                        "message": f"Successfully set '{final_filename}' as style reference for tag '{tag_id}'",
                         "filename": final_filename,
                         "assetUrl": asset_url,
                         "type": "style",
                         "tag_id": tag_id,
+                        "section": section,
+                        "scope": "tag",
+                        "override_scope": "tag",
+                        "is_scene_override": True
+                    })
+                    return
+
+                if scope == "scene" and section:
+                    current_settings = self.load_workspace_settings(stem)
+                    current_settings.setdefault("sections", {}).setdefault(section, {})["style_ref"] = final_filename
+                    if tag_id and tag_id in current_settings.get("scenes", {}):
+                        current_settings["scenes"][tag_id].pop("style_ref", None)
+                    self.save_workspace_settings(stem, current_settings)
+                    asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
+                    self.send_json_response({
+                        "success": True,
+                        "message": f"Successfully set '{final_filename}' as style reference for scene '{section}'",
+                        "filename": final_filename,
+                        "assetUrl": asset_url,
+                        "type": "style",
+                        "tag_id": tag_id,
+                        "section": section,
                         "scope": "scene",
+                        "override_scope": "scene",
                         "is_scene_override": True
                     })
                     return
@@ -1186,12 +1257,19 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 with open(s_json_file, "w", encoding="utf-8") as f:
                     json.dump(s_data, f, ensure_ascii=False, indent=2)
 
-                # If tag_id had a scene override, clean it up so it follows the new global default
-                if tag_id:
-                    current_settings = self.load_workspace_settings(stem)
-                    if "scenes" in current_settings and tag_id in current_settings["scenes"]:
+                # If tag_id or section had overrides, clean them up so they follow the new global default
+                current_settings = self.load_workspace_settings(stem)
+                settings_dirty = False
+                if tag_id and tag_id in current_settings.get("scenes", {}):
+                    if "style_ref" in current_settings["scenes"][tag_id]:
                         current_settings["scenes"][tag_id].pop("style_ref", None)
-                        self.save_workspace_settings(stem, current_settings)
+                        settings_dirty = True
+                if section and section in current_settings.get("sections", {}):
+                    if "style_ref" in current_settings["sections"][section]:
+                        current_settings["sections"][section].pop("style_ref", None)
+                        settings_dirty = True
+                if settings_dirty:
+                    self.save_workspace_settings(stem, current_settings)
 
                 asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
                 self.send_json_response({
@@ -1201,6 +1279,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     "assetUrl": asset_url,
                     "type": "style",
                     "scope": "global",
+                    "override_scope": None,
                     "is_scene_override": False
                 })
 
@@ -1213,54 +1292,78 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 char_dir.mkdir(parents=True, exist_ok=True)
                 final_filename = filename
 
-                # 1. Check if the file is ALREADY inside this specific character's directory!
+                # 1. Resolve source file. Check asset_path FIRST!
                 src_file = None
-                if final_filename and (char_dir / final_filename).is_file():
-                    src_file = char_dir / final_filename
-                elif asset_path:
-                    # Clean relative asset path
+                if asset_path:
                     cand = ws_dir / asset_path
                     if cand.exists() and cand.is_file():
                         # Protect against cross-character file copying collisions
-                        if "char-ref" in str(cand) and char_name not in str(cand):
+                        if "char-ref" in str(cand) and cand.parent.name != char_name:
                             final_filename = f"{cand.parent.name}_{cand.name}"
+                        else:
+                            final_filename = final_filename or cand.name
                         src_file = cand
-                        final_filename = final_filename or src_file.name
 
-                if not src_file and final_filename:
-                    # Fallback check images folder ONLY
-                    if (ws_dir / "images" / final_filename).is_file():
-                        src_file = ws_dir / "images" / final_filename
+                if not src_file and final_filename and (char_dir / final_filename).is_file():
+                    src_file = char_dir / final_filename
+
+                if not src_file and final_filename and (ws_dir / "images" / final_filename).is_file():
+                    src_file = ws_dir / "images" / final_filename
 
                 if not src_file:
                     self.send_json_response({"error": f"Asset file '{asset_path or filename}' not found for character '{char_name}'"}, status=404)
                     return
 
                 dst_file = char_dir / final_filename
-                # Only copy if source is different from destination
                 if src_file.resolve() != dst_file.resolve():
                     shutil.copy2(src_file, dst_file)
 
-                # Scope: Scene only vs Global
-                if scope == "scene" and tag_id:
+                # Scope 1: Only this tag
+                if scope == "tag" and tag_id:
                     current_settings = self.load_workspace_settings(stem)
                     current_settings.setdefault("scenes", {}).setdefault(tag_id, {}).setdefault("character_refs", {})[char_name] = final_filename
                     self.save_workspace_settings(stem, current_settings)
                     asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
                     self.send_json_response({
                         "success": True,
-                        "message": f"Successfully set '{final_filename}' as reference photo for '{char_name}' on scene '{tag_id}'",
+                        "message": f"Successfully set '{final_filename}' as reference photo for '{char_name}' on tag '{tag_id}'",
                         "filename": final_filename,
                         "assetUrl": asset_url,
                         "type": "character",
                         "character_name": char_name,
                         "tag_id": tag_id,
-                        "scope": "scene",
+                        "section": section,
+                        "scope": "tag",
+                        "override_scope": "tag",
                         "is_scene_override": True
                     })
                     return
 
-                # Global update: Update character.json preserving existing metadata
+                # Scope 2: This Scene (Section)
+                if scope == "scene" and section:
+                    current_settings = self.load_workspace_settings(stem)
+                    current_settings.setdefault("sections", {}).setdefault(section, {}).setdefault("character_refs", {})[char_name] = final_filename
+                    # Clean tag override for this character on this tag so it inherits the scene override
+                    if tag_id and tag_id in current_settings.get("scenes", {}):
+                        current_settings["scenes"][tag_id].get("character_refs", {}).pop(char_name, None)
+                    self.save_workspace_settings(stem, current_settings)
+                    asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
+                    self.send_json_response({
+                        "success": True,
+                        "message": f"Successfully set '{final_filename}' as reference photo for '{char_name}' on scene '{section}'",
+                        "filename": final_filename,
+                        "assetUrl": asset_url,
+                        "type": "character",
+                        "character_name": char_name,
+                        "tag_id": tag_id,
+                        "section": section,
+                        "scope": "scene",
+                        "override_scope": "scene",
+                        "is_scene_override": True
+                    })
+                    return
+
+                # Scope 3: Global workspace default
                 c_json_file = char_dir / "character.json"
                 c_data = {}
                 if c_json_file.exists():
@@ -1325,13 +1428,21 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 with open(all_chars_file, "w", encoding="utf-8") as f:
                     json.dump(chars_meta, f, ensure_ascii=False, indent=2)
 
-                # Clear scene override if any for this tag so it uses the new global default
-                if tag_id:
-                    current_settings = self.load_workspace_settings(stem)
-                    if "scenes" in current_settings and tag_id in current_settings["scenes"]:
-                        if "character_refs" in current_settings["scenes"][tag_id]:
+                # Clear tag and scene override if any for this character so they follow global default
+                current_settings = self.load_workspace_settings(stem)
+                settings_dirty = False
+                if tag_id and tag_id in current_settings.get("scenes", {}):
+                    if "character_refs" in current_settings["scenes"][tag_id]:
+                        if char_name in current_settings["scenes"][tag_id]["character_refs"]:
                             current_settings["scenes"][tag_id]["character_refs"].pop(char_name, None)
-                            self.save_workspace_settings(stem, current_settings)
+                            settings_dirty = True
+                if section and section in current_settings.get("sections", {}):
+                    if "character_refs" in current_settings["sections"][section]:
+                        if char_name in current_settings["sections"][section]["character_refs"]:
+                            current_settings["sections"][section]["character_refs"].pop(char_name, None)
+                            settings_dirty = True
+                if settings_dirty:
+                    self.save_workspace_settings(stem, current_settings)
 
                 asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
                 self.send_json_response({
@@ -1342,6 +1453,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     "type": "character",
                     "character_name": char_name,
                     "scope": "global",
+                    "override_scope": None,
                     "is_scene_override": False
                 })
             else:
@@ -1487,11 +1599,13 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
 
         ws_settings = self.load_workspace_settings(stem)
         scene_override = ws_settings.get("scenes", {}).get(tag_id, {}) if tag_id else {}
+        section_override = ws_settings.get("sections", {}).get(section, {}) if section else {}
         global_type_cfg = ws_settings.get("global", {}).get(media_type, {})
 
         effective_ratio = (
             ratio if ratio and ratio != "inherit"
             else scene_override.get("ratio")
+            or section_override.get("ratio")
             or global_type_cfg.get("ratio")
             or "16:9"
         )
@@ -1499,6 +1613,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         effective_size = (
             size if size and size != "inherit"
             else scene_override.get("size")
+            or section_override.get("size")
             or global_type_cfg.get("size")
             or "1K"
         )
@@ -1506,6 +1621,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
         effective_model = (
             model if model and model != "inherit"
             else scene_override.get("model")
+            or section_override.get("model")
             or global_type_cfg.get("model")
             or ("gemini-3.1-flash-image" if media_type == "image" else "veo-2.0-generate-001")
         )
@@ -1534,7 +1650,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             else:
                 cmd.extend(["--model", str(effective_model)])
 
-        extra_prompt = (payload.get("extra_prompt") or scene_override.get("extra_prompt") or "").strip()
+        extra_prompt = (payload.get("extra_prompt") or scene_override.get("extra_prompt") or section_override.get("extra_prompt") or "").strip()
         if extra_prompt:
             cmd.extend(["--extra-prompt", extra_prompt])
 
@@ -1563,12 +1679,15 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             "characters": []
         }
 
-        # Style reference (check scene override first)
+        # Style reference (tag override > section override > global)
         style_dir = ws_dir / "style-ref"
         style_img_file = None
-        scene_style_ref = scene_override.get("style_ref")
-        if scene_style_ref and (style_dir / scene_style_ref).is_file():
-            style_img_file = style_dir / scene_style_ref
+        tag_style_ref = scene_override.get("style_ref")
+        sec_style_ref = section_override.get("style_ref")
+        if tag_style_ref and (style_dir / tag_style_ref).is_file():
+            style_img_file = style_dir / tag_style_ref
+        elif sec_style_ref and (style_dir / sec_style_ref).is_file():
+            style_img_file = style_dir / sec_style_ref
         elif style_dir.exists():
             s_json_file = style_dir / "style.json"
             s_imgs = []
@@ -1644,16 +1763,20 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     if cname and (cname in matching_tag.get("prompt", "") or cname in matching_tag.get("context_hint", "")):
                         matched_characters.append(ch)
 
-        scene_char_refs = scene_override.get("character_refs", {})
+        tag_char_refs = scene_override.get("character_refs", {})
+        sec_char_refs = section_override.get("character_refs", {})
         for ch in matched_characters:
             cname = ch.get("name", "")
             cd = char_dir / cname
             c_img_file = None
 
-            # 1. Check scene override first!
-            scene_c_img = scene_char_refs.get(cname)
-            if scene_c_img and (cd / scene_c_img).is_file():
-                c_img_file = cd / scene_c_img
+            # 1. Check tag override first!
+            tag_c_img = tag_char_refs.get(cname)
+            if tag_c_img and (cd / tag_c_img).is_file():
+                c_img_file = cd / tag_c_img
+            # 2. Check section override second!
+            elif sec_char_refs.get(cname) and (cd / sec_char_refs[cname]).is_file():
+                c_img_file = cd / sec_char_refs[cname]
             else:
                 c_json_path = cd / "character.json"
                 preferred_c_imgs = []

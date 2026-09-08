@@ -1482,12 +1482,12 @@ def extract_characters_from_story(
                 "portrait_prompt": f"Character concept portrait of {m_clean}, young adventurer, expressive face, neutral gray background, storybook character design"
             })
 
-    # Pattern C: Boss and Monster extraction from narrative text (e.g. 冰箱怪, 微波炉怪, 冰山怪, 信号聚合体, 雷霆巨兽)
+    # Pattern C: Boss and Monster extraction from narrative text (e.g. 冰箱怪, 微波炉怪, 冰山怪, 信号聚合体, 雷霆巨兽, 虚空领主)
     monster_matches = []
-    # Quoted monsters / bold monsters: “冰箱怪”, “冰山怪”, “信号聚合体”
-    monster_matches.extend(re.findall(r'[“"「]([^\s“”"「」]{2,10}(?:怪|巨兽|聚合体|畸变体|魔物))[”"」]', no_comment_text))
-    # Context verbs: 一只...怪, 巨大的...怪, 对抗...怪, 化身为...怪
-    monster_matches.extend(re.findall(r'(?:一只|数只|化身为|巨大的|形成|盘踞着|击碎|对抗|面对|消灭|与)(?:高达[^\s，。]+的)?(?:[“"「])?([^\s，。、“”"「」]{2,10}(?:怪|巨兽|聚合体|畸变体|魔物))(?:[”"」])?', no_comment_text))
+    # Quoted monsters / bold monsters
+    monster_matches.extend(re.findall(r'[“"「]([^\s“”"「」]{2,12}(?:怪|巨兽|聚合体|畸变体|魔物|魔兽|领主|首领|霸主|魔王|泰坦|傀儡|恶魔|异界生物))[”"」]', no_comment_text))
+    # Context verbs
+    monster_matches.extend(re.findall(r'(?:一只|数只|化身为|巨大的|形成|盘踞着|击碎|对抗|面对|消灭|与|抵御|遭遇|降临|出现)(?:高达[^\s，。]+的)?(?:[“"「])?([^\s，。、“”"「」]{2,12}(?:怪|巨兽|聚合体|畸变体|魔物|魔兽|领主|首领|霸主|魔王|泰坦|傀儡|恶魔|异界生物))(?:[”"」])?', no_comment_text))
 
     for raw_m in monster_matches:
         sub_names = [raw_m]
@@ -1497,11 +1497,11 @@ def extract_characters_from_story(
             sub_names = raw_m.split("与")
         for m in sub_names:
             m_clean = m.strip().strip('“”"\' ')
-            if len(m_clean) in range(2, 10) and m_clean not in seen_names:
+            if len(m_clean) in range(2, 12) and m_clean not in seen_names:
                 if not any(stop in m_clean for stop in ["前代", "这片", "然而", "但是", "碎片", "怪物", "各种", "机械生命"]):
                     seen_names.add(m_clean)
                     cat = determine_category(m_clean)
-                    if cat == "boss" or "冰山" in m_clean or "巨兽" in m_clean or "聚合体" in m_clean:
+                    if cat == "boss" or any(k in m_clean for k in ["冰山", "巨兽", "聚合体", "领主", "霸主", "魔王", "首领", "泰坦"]):
                         cat = "boss"
                         role = "Epic Boss Titan"
                         if "冰山" in m_clean:
@@ -1513,11 +1513,11 @@ def extract_characters_from_story(
                             visual_dna = "Towering electronic aggregate monster woven from tangled transmission towers, radar antennas, and high-voltage pulsing plasma arcs, blinding violet-blue electrical core, isolated on studio background."
                             portrait_prompt = f"Concept art portrait of electrifying cybernetic boss '{m_clean}', entangled broadcast towers and lightning plasma coils, clean neutral gray background, storybook boss design"
                         else:
-                            visual_dna = f"Towering primordial boss beast '{m_clean}', colossal mass, glowing runic aura, immense physical build, plain studio background."
+                            visual_dna = f"Towering formidable boss titan '{m_clean}', colossal mass, glowing runic aura, menacing silhouette, plain studio background."
                             portrait_prompt = f"Concept art portrait of epic boss titan '{m_clean}', massive scale, glowing runic power, highly detailed storybook concept art"
                     else:
                         cat = "enemy"
-                        role = "Mutated Appliance Monster"
+                        role = "Mutated Monster Enemy"
                         if "冰箱" in m_clean:
                             role = "Mutated Frost Appliance Monster"
                             visual_dna = "Double-door refrigerator mutated into a ferocious beast: jagged metal saw-blade teeth in hinged jaws, two glowing blood-red indicator light eyes, venting dense subzero frost clouds, isolated on plain background."
@@ -1527,8 +1527,8 @@ def extract_characters_from_story(
                             visual_dna = "Industrial microwave mutated with fiery glowing heating coils, crackling orange electric sparks, distorted metal claws, venting intense heat waves, plain studio background."
                             portrait_prompt = f"Creature design portrait of mutated appliance monster '{m_clean}', glowing orange heating element teeth, metallic claws, studio lighting, clean isolated background"
                         else:
-                            visual_dna = f"Mutated machine monster '{m_clean}', sharp mechanical components, glowing hostile sensory optics, distorted metallic shell, isolated plain background."
-                            portrait_prompt = f"Creature design portrait of storybook monster '{m_clean}', distorted mechanical features, glowing optics, clean neutral background"
+                            visual_dna = f"Hostile mutated creature '{m_clean}', sharp aggressive features, glowing menacing sensory optics, isolated plain background."
+                            portrait_prompt = f"Creature design portrait of storybook monster '{m_clean}', hostile predatory features, glowing optics, clean neutral background"
 
                     extracted.append({
                         "name": m_clean,
@@ -1556,9 +1556,9 @@ def extract_characters_from_story(
             extracted.append({
                 "name": m,
                 "category": "hero",
-                "role": "Explorer",
-                "visual_dna": f"Adventurous explorer {m}, distinctive uniform, determined expression, isolated character sheet.",
-                "portrait_prompt": f"Character design concept portrait of {m}, sci-fi / fantasy explorer, highly detailed, neutral gray background"
+                "role": "Pilot",
+                "visual_dna": f"Heroic pilot {m}, aviator goggles, flight jacket, confident stance, clean neutral background.",
+                "portrait_prompt": f"Character concept portrait of heroic pilot {m}, aviation gear, neutral studio background, storybook character design"
             })
 
     if not extracted:
@@ -1570,7 +1570,7 @@ def extract_characters_from_story(
             "portrait_prompt": "Storybook protagonist character concept sheet, isolated on neutral background, highly detailed 8k portrait"
         })
 
-    return extracted[:8]
+    return extracted[:16]
 
 
 def extract_style_from_story(
@@ -2633,17 +2633,22 @@ def resolve_tag_references(
     tag_type = tag.get("type", "image")
     prompt = tag.get("prompt", "")
 
-    # Load scene overrides from workspace settings.json
-    scene_overrides: Dict[str, Any] = {}
+    # Load tag and section overrides from workspace settings.json
+    tag_id = tag.get("id", "")
+    tag_section = tag.get("section") or tag.get("title") or ""
+    tag_overrides: Dict[str, Any] = {}
+    sec_overrides: Dict[str, Any] = {}
     if workspace and (workspace.workspace_dir / "settings.json").exists():
         try:
             with open(workspace.workspace_dir / "settings.json", "r", encoding="utf-8") as sf:
                 ws_settings = json.load(sf)
-                scene_overrides = ws_settings.get("scenes", {}).get(tag_id, {})
+                tag_overrides = ws_settings.get("scenes", {}).get(tag_id, {})
+                if tag_section:
+                    sec_overrides = ws_settings.get("sections", {}).get(tag_section, {})
         except Exception:
             pass
     if tag.get("scene_overrides"):
-        scene_overrides.update(tag.get("scene_overrides"))
+        tag_overrides.update(tag.get("scene_overrides"))
 
     # Load characters if not passed
     all_chars = characters or []
@@ -2663,17 +2668,22 @@ def resolve_tag_references(
         except Exception:
             pass
 
-    # Resolve Style Reference Image (check scene override first)
+    # Resolve Style Reference Image (tag override > section override > global)
     style_img_path = None
     style_img_name = None
-    is_style_override = False
-    scene_style = scene_overrides.get("style_ref") or tag.get("style_ref")
+    style_override_scope = None
+    tag_style = tag_overrides.get("style_ref") or tag.get("style_ref")
+    sec_style = sec_overrides.get("style_ref")
 
     if workspace and workspace.style_ref_dir.exists():
-        if scene_style and (workspace.style_ref_dir / scene_style).is_file():
-            style_img_path = workspace.style_ref_dir / scene_style
-            style_img_name = scene_style
-            is_style_override = True
+        if tag_style and (workspace.style_ref_dir / tag_style).is_file():
+            style_img_path = workspace.style_ref_dir / tag_style
+            style_img_name = tag_style
+            style_override_scope = "tag"
+        elif sec_style and (workspace.style_ref_dir / sec_style).is_file():
+            style_img_path = workspace.style_ref_dir / sec_style
+            style_img_name = sec_style
+            style_override_scope = "scene"
         else:
             candidates = sorted(
                 list(workspace.style_ref_dir.glob("*.png")) +
@@ -2700,7 +2710,8 @@ def resolve_tag_references(
             "path": str(style_img_path),
             "style_name": active_style.get("style_name", "Default Art Style"),
             "style_prompt": active_style.get("style_prompt", ""),
-            "is_scene_override": is_style_override,
+            "is_scene_override": style_override_scope is not None,
+            "override_scope": style_override_scope,
             "role": "Style Reference (Always Active)"
         }
 
@@ -2709,24 +2720,30 @@ def resolve_tag_references(
     char_refs_info = []
     char_img_paths = []
 
-    scene_char_refs = scene_overrides.get("character_refs", {})
+    tag_char_refs = tag_overrides.get("character_refs", {})
     if isinstance(tag.get("character_refs"), dict):
-        scene_char_refs.update(tag.get("character_refs"))
+        tag_char_refs.update(tag.get("character_refs"))
+    sec_char_refs = sec_overrides.get("character_refs", {})
 
     for ch in matched_chars:
         cname = ch.get("name", "")
         c_img_path = None
         c_img_name = None
-        is_char_override = False
+        char_override_scope = None
 
         if workspace and workspace.char_ref_dir.exists():
             c_dir = workspace.char_ref_dir / cname
             if c_dir.exists():
-                # 1. Check scene override first!
-                if cname in scene_char_refs and (c_dir / scene_char_refs[cname]).is_file():
-                    c_img_path = c_dir / scene_char_refs[cname]
-                    c_img_name = scene_char_refs[cname]
-                    is_char_override = True
+                # 1. Check tag override first!
+                if cname in tag_char_refs and (c_dir / tag_char_refs[cname]).is_file():
+                    c_img_path = c_dir / tag_char_refs[cname]
+                    c_img_name = tag_char_refs[cname]
+                    char_override_scope = "tag"
+                # 2. Check section override second!
+                elif cname in sec_char_refs and (c_dir / sec_char_refs[cname]).is_file():
+                    c_img_path = c_dir / sec_char_refs[cname]
+                    c_img_name = sec_char_refs[cname]
+                    char_override_scope = "scene"
                 else:
                     c_candidates = sorted(
                         list(c_dir.glob("*.png")) +
@@ -2735,7 +2752,7 @@ def resolve_tag_references(
                         list(c_dir.glob("*.jpeg"))
                     )
                     if c_candidates:
-                        # 2. Check c_dir / "character.json" for authoritative image preference
+                        # Check c_dir / "character.json" for authoritative image preference
                         pref_list = []
                         c_json_p = c_dir / "character.json"
                         if c_json_p.exists():
@@ -2773,8 +2790,9 @@ def resolve_tag_references(
             "visual_dna": ch.get("visual_dna", ""),
             "image": c_img_name,
             "path": str(c_img_path) if c_img_path else "",
-            "is_scene_override": is_char_override,
-            "role_guide": f"Character Identity Reference: {cname} (Context Matched)"
+            "is_scene_override": char_override_scope is not None,
+            "override_scope": char_override_scope,
+            "role_guide": f"Character Identity Reference: {cname} ({'Tag Override' if char_override_scope == 'tag' else ('Scene Override' if char_override_scope == 'scene' else 'Context Matched')})"
         })
 
     # Compose Final Model Prompt

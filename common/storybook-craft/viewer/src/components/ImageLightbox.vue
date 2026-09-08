@@ -90,7 +90,9 @@
                     <div class="ref-tag-row">
                       <span class="badge-role style-role">Style Reference</span>
                       <span class="badge-always">Always Active</span>
-                      <span v-if="styleRef.is_scene_override" class="badge-override" title="This reference applies specifically to this scene">Scene Override</span>
+                      <span v-if="styleRef.override_scope === 'tag'" class="badge-override badge-override-tag" title="This reference applies specifically to this tag">Tag Override</span>
+                      <span v-else-if="styleRef.override_scope === 'scene'" class="badge-override badge-override-scene" title="This reference applies to this entire scene">Scene Override</span>
+                      <span v-else-if="styleRef.is_scene_override" class="badge-override badge-override-tag" title="This reference applies specifically to this tag">Tag Override</span>
                     </div>
                     <h5 class="ref-name">{{ styleRef.style_name || styleRef.name }}</h5>
                     <p class="ref-desc">Guides artistic medium, textures, palette & lighting.</p>
@@ -106,12 +108,12 @@
                         <span>Change</span>
                       </button>
                       <button
-                        v-if="styleRef.is_scene_override"
+                        v-if="styleRef.override_scope || styleRef.is_scene_override"
                         type="button"
                         class="clean-btn clean-btn-xs reset-ref-btn"
                         :disabled="isUploadingRef || isSelectingRef"
-                        title="Reset style reference override for this scene back to workspace default"
-                        @click="onResetRef('style')"
+                        title="Reset style reference override back to workspace default"
+                        @click="onResetRef('style', '', styleRef.override_scope)"
                       >
                         <span class="material-symbols-rounded">restart_alt</span>
                         <span>Reset</span>
@@ -146,7 +148,9 @@
                           {{ c.category === 'boss' ? 'Boss Titan' : (c.category === 'enemy' ? 'Enemy / Monster' : 'Character Reference') }}
                         </span>
                         <span class="badge-matched">Matched</span>
-                        <span v-if="c.is_scene_override" class="badge-override" title="This reference photo applies specifically to this scene">Scene Override</span>
+                        <span v-if="c.override_scope === 'tag'" class="badge-override badge-override-tag" title="This reference photo applies specifically to this tag">Tag Override</span>
+                        <span v-else-if="c.override_scope === 'scene'" class="badge-override badge-override-scene" title="This reference photo applies to this entire scene">Scene Override</span>
+                        <span v-else-if="c.is_scene_override" class="badge-override badge-override-tag" title="This reference photo applies specifically to this tag">Tag Override</span>
                       </div>
                       <h5 class="ref-name">{{ c.name }}</h5>
                       <p class="ref-desc">Preserves visual identity, features & costume.</p>
@@ -162,12 +166,12 @@
                           <span>Change</span>
                         </button>
                         <button
-                          v-if="c.is_scene_override"
+                          v-if="c.override_scope || c.is_scene_override"
                           type="button"
                           class="clean-btn clean-btn-xs reset-ref-btn"
                           :disabled="isUploadingRef || isSelectingRef"
-                          title="Reset reference photo for this scene back to default"
-                          @click="onResetRef('character', c.name)"
+                          title="Reset reference photo back to default"
+                          @click="onResetRef('character', c.name, c.override_scope)"
                         >
                           <span class="material-symbols-rounded">restart_alt</span>
                           <span>Reset</span>
@@ -518,12 +522,20 @@
               <span>Apply Selection Scope:</span>
             </div>
             <div class="picker-scope-options">
+              <label class="scope-radio-label" :class="{ selected: pickerScope === 'tag' }">
+                <input type="radio" v-model="pickerScope" value="tag" />
+                <span class="scope-radio-custom"></span>
+                <span class="scope-text">
+                  <strong>Only this tag</strong>
+                  <span class="scope-hint">Isolated override for {{ tagId || 'current tag' }}</span>
+                </span>
+              </label>
               <label class="scope-radio-label" :class="{ selected: pickerScope === 'scene' }">
                 <input type="radio" v-model="pickerScope" value="scene" />
                 <span class="scope-radio-custom"></span>
                 <span class="scope-text">
-                  <strong>This Scene Only</strong>
-                  <span class="scope-hint">Isolated override for {{ tagId || 'current scene' }}</span>
+                  <strong>This Scene</strong>
+                  <span class="scope-hint">Apply to all tags in scene "{{ section || 'current scene' }}"</span>
                 </span>
               </label>
               <label class="scope-radio-label" :class="{ selected: pickerScope === 'global' }">
@@ -531,7 +543,7 @@
                 <span class="scope-radio-custom"></span>
                 <span class="scope-text">
                   <strong>All Scenes</strong>
-                  <span class="scope-hint">Update workspace default</span>
+                  <span class="scope-hint">Update workspace default (all tags)</span>
                 </span>
               </label>
             </div>
@@ -682,7 +694,7 @@ const localStatusMsg = ref('');
 const showAssetPicker = ref(false);
 const pickerType = ref('style'); // 'style' | 'character'
 const pickerTargetName = ref('');
-const pickerScope = ref('scene'); // 'scene' | 'global'
+const pickerScope = ref('tag'); // 'tag' | 'scene' | 'global'
 const pickerTab = ref('current'); // for character: 'current' | 'all'
 const pickerSearch = ref('');
 const isSelectingRef = ref(false);
@@ -791,9 +803,17 @@ function isAssetCurrentlyActive(item) {
            (styleRef.value.assetUrl && styleRef.value.assetUrl.includes(item.filename));
   }
   if (pickerType.value === 'character') {
+    if (item.characterName && item.characterName !== pickerTargetName.value) {
+      return false;
+    }
     const targetChar = (characterRefs.value || []).find(c => c.name === pickerTargetName.value);
-    if (!targetChar || !targetChar.assetUrl) return false;
-    return targetChar.assetUrl.includes(item.filename);
+    if (!targetChar) return false;
+    if (targetChar.image && targetChar.image === item.filename) return true;
+    if (targetChar.assetUrl) {
+      return targetChar.assetUrl.includes(`/${encodeURIComponent(item.characterName || pickerTargetName.value)}/${item.filename}`) ||
+             targetChar.assetUrl.endsWith(`/${item.filename}`);
+    }
+    return false;
   }
   return false;
 }
@@ -803,7 +823,7 @@ async function openAssetPicker(type, targetName = '') {
   pickerTargetName.value = targetName;
   pickerSearch.value = '';
   pickerTab.value = 'current';
-  pickerScope.value = 'scene';
+  pickerScope.value = 'tag';
   showAssetPicker.value = true;
 
   const currentStem = activeStem.value;
@@ -835,23 +855,28 @@ async function onSelectAsset(item) {
       assetPath: item.path,
       filename: item.filename,
       tagId: tagId.value,
+      section: section.value,
       scope: pickerScope.value
     });
 
-    const isScene = pickerScope.value === 'scene';
-    const scopeLabel = isScene ? `Scene ${tagId.value || 'Override'}` : 'Global Default';
+    const isOverride = pickerScope.value !== 'global';
+    const scopeLabel = pickerScope.value === 'tag'
+      ? `Tag ${tagId.value || 'Override'}`
+      : (pickerScope.value === 'scene' ? `Scene '${section.value || 'Override'}'` : 'Global Default');
 
     if (pickerType.value === 'style') {
       if (styleRef.value) {
         styleRef.value.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
         styleRef.value.name = res.filename;
-        styleRef.value.is_scene_override = isScene;
+        styleRef.value.override_scope = isOverride ? pickerScope.value : null;
+        styleRef.value.is_scene_override = isOverride;
       } else {
         styleRef.value = {
           name: res.filename,
           assetUrl: `${res.assetUrl}?t=${Date.now()}`,
           style_name: res.filename,
-          is_scene_override: isScene,
+          override_scope: isOverride ? pickerScope.value : null,
+          is_scene_override: isOverride,
           role: 'Style Reference (Always Active)'
         };
       }
@@ -861,7 +886,8 @@ async function onSelectAsset(item) {
       if (targetChar) {
         targetChar.image = res.filename;
         targetChar.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
-        targetChar.is_scene_override = isScene;
+        targetChar.override_scope = isOverride ? pickerScope.value : null;
+        targetChar.is_scene_override = isOverride;
       }
       localStatusMsg.value = `✨ Reference photo for '${pickerTargetName.value}' updated to '${res.filename}' (${scopeLabel})! Click 'Regenerate Scene' to re-render.`;
     }
@@ -876,32 +902,36 @@ async function onSelectAsset(item) {
   }
 }
 
-async function onResetRef(type, targetName = '') {
+async function onResetRef(type, targetName = '', overrideScope = null) {
   const currentStem = activeStem.value;
   if (!currentStem || isSelectingRef.value) return;
 
   isSelectingRef.value = true;
-  localStatusMsg.value = `Resetting reference override for ${targetName || 'style'} on scene ${tagId.value}...`;
+  localStatusMsg.value = `Resetting reference override for ${targetName || 'style'}...`;
 
   try {
     await resetReferenceImage(currentStem, {
       type,
       characterName: targetName,
-      tagId: tagId.value
+      tagId: tagId.value,
+      section: section.value,
+      scope: overrideScope || 'tag'
     });
 
     if (type === 'style') {
       if (styleRef.value) {
+        styleRef.value.override_scope = null;
         styleRef.value.is_scene_override = false;
       }
     } else if (type === 'character') {
       const targetChar = (characterRefs.value || []).find(c => c.name === targetName);
       if (targetChar) {
+        targetChar.override_scope = null;
         targetChar.is_scene_override = false;
       }
     }
 
-    localStatusMsg.value = `✨ Reset reference override for ${targetName || 'style'} on scene ${tagId.value}!`;
+    localStatusMsg.value = `✨ Reset reference override for ${targetName || 'style'}!`;
     emit('refresh');
   } catch (err) {
     localStatusMsg.value = `❌ Failed to reset reference override: ${err.message}`;
@@ -1158,8 +1188,10 @@ const currentGenStatus = computed(() => {
   return getGenerationStatus(activeStem.value, tagId.value);
 });
 
+const localIsGenerating = ref(false);
+
 const isGenerating = computed(() => {
-  return isTagGenerating(activeStem.value, tagId.value);
+  return localIsGenerating.value || isTagGenerating(activeStem.value, tagId.value);
 });
 
 const generationStatusMsg = computed(() => {
@@ -1331,7 +1363,8 @@ async function triggerGeneration() {
   const currentStem = activeStem.value;
   if (!currentStem) return;
 
-  localStatusMsg.value = '';
+  localIsGenerating.value = true;
+  localStatusMsg.value = `Invoking generation for ${tagId.value}...`;
 
   try {
     const res = await runTagGeneration(currentStem, {
@@ -1350,6 +1383,8 @@ async function triggerGeneration() {
     }
   } catch (err) {
     localStatusMsg.value = `❌ Error: ${err.message}`;
+  } finally {
+    localIsGenerating.value = false;
   }
 }
 
@@ -1525,8 +1560,7 @@ defineExpose({
 }
 
 .lightbox-dialog::backdrop {
-  background-color: rgba(9, 9, 11, 0.75);
-  backdrop-filter: blur(8px);
+  background-color: rgba(9, 9, 11, 0.78);
 }
 
 .lightbox-sheet {
@@ -2181,11 +2215,20 @@ defineExpose({
 .badge-override {
   font-size: 0.65rem;
   font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.badge-override-tag {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+  border: 1px solid rgba(37, 99, 235, 0.28);
+}
+
+.badge-override-scene {
   color: #d97706;
   background: rgba(217, 119, 6, 0.12);
   border: 1px solid rgba(217, 119, 6, 0.25);
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
 }
 
 .ref-name {
