@@ -15,7 +15,7 @@ This document provides the foundational principles, architecture, binding standa
 - `tests/`: Verified sample assets:
   - Base bodies: `tests/man_anim_base.usdz`, `tests/woman_anim_base.usdz`
   - Hair models: `tests/man_hair.usdz`, `tests/woman_hair.usdz`
-  - Garments: `tests/man_suit.usdz`
+  - Garments: `tests/man_suit.usdz`, `tests/man_pants.usdz`
   - Animation clips: `tests/anim_hip_hop.usda`, `tests/anim_head_turn.usda`
   - 2D turnaround references: `tests/*_ref_*.png`
 - `outputs/`: Output directory structure per model:
@@ -74,10 +74,12 @@ Do **not** use Blender's automatic heat-diffusion weighting (`bpy.ops.object.par
     ```python
     reassign_and_remove_vertex_group(garment_mesh, "mixamorig_Head", "mixamorig_Neck")
     ```
+  - *Lower Garments*: Transfer can capture upper-body vertex groups on the waistband. Prune all upper-body vertex groups (`Head`, `Neck`, `Spine1`, `Spine2`, `Shoulder`, `Arm`, `Hand`, etc.) and reassign `mixamorig_Spine1`/`mixamorig_Spine2` weights to `mixamorig_Spine` so upper-body motion does not pull on trousers.
 
 ### Principle 3: Anatomical Deformation & Centerline Alignment
-When adapting a canonical garment to an avatar, you must distinguish between the **torso placement** and the **limb bone axes**:
+When adapting canonical garments (upper or lower) to an avatar, you must distinguish between the root torso/pelvis placement and the limb bone axes:
 
+#### Upper Garment Centerline Alignment
 1. **Torso Placement**:
    - The torso center $Y_{\text{target}}$ is shifted forward (e.g. $Y_{\text{target}} = p_{\text{neck}}.y - 0.045 \cdot r_{\text{sh}}$) to provide clearance for the avatar's muscular chest and pectoral depth.
 2. **Limb Bone Axis Discrepancy (Crucial Lesson Learned)**:
@@ -94,6 +96,42 @@ When adapting a canonical garment to an avatar, you must distinguish between the
    - Anchor the cuff rim just before the wrist joint:
      $$X_{\text{cuff}} = X_{\text{wrist}} - 0.010\text{m}$$
    - Apply quadratic flare at the cuff opening ($1.0 + 0.02 \cdot u^2$) so the hands emerge cleanly with no cuff rim clipping.
+
+#### Lower Garment (Trousers/Pants) Centerline & Volume Alignment
+1. **Piecewise Vertical Mapping**:
+   - Trousers feature two distinct anatomical zones: the **inseam** (ankles to crotch) and the **pelvis rise** (crotch to waistband).
+   - Compute `target_waist_z` ($p_{\text{spine}}.z + 0.050 \cdot \text{leg\_ratio}$), `target_crotch_z` ($Z_{\text{body\_crotch\_min}} - 0.020\text{m}$), and `target_ankle_z` ($p_{\text{foot}}.z + 0.012\text{m}$).
+   - Map canonical garment vertices piecewise to eliminate crotch drop while anchoring cuffs above shoes and waistbands at the natural waist.
+2. **Dynamic Crotch Perineum Clearance**:
+   - Rather than relying solely on hip bones, sample the avatar's clean body mesh between the thighs to find $Z_{\text{body\_crotch\_min}}$.
+   - Position `target_crotch_z = body_crotch_min_z - 0.020m` (2cm below the lowest perineum vertex). This unconditionally encloses avatar underwear/crotch geometry on both male and female avatars without poke-through.
+3. **Regional Pelvic Scanning & Slim-Fit Tapered Circumference Scaling**:
+   - Rather than sampling a single arbitrary slice at `p_hips.z`, scan the pelvic zone across greater trochanters & glutes ($Z \in [Z_{\text{crotch}} + 0.3 \cdot (p_{\text{hips}}.z - Z_{\text{crotch}}), p_{\text{hips}}.z + 0.03\text{m}]$) to extract true anatomical maximum width `body_hips_w` and depth `body_hips_d`.
+   - Compute separate tailored scales for waist and hips:
+     $$\text{scale}_{\text{waist}, x} = \frac{\text{body\_waist\_w}}{\text{raw\_waist\_w}} \cdot 1.08, \quad \text{scale}_{\text{waist}, y} = \frac{\text{body\_waist\_d}}{\text{raw\_waist\_d}} \cdot 1.08$$
+     $$\text{scale}_{\text{hips}, x} = \frac{\text{body\_hips\_w}}{\text{raw\_hips\_w}} \cdot 1.10, \quad \text{scale}_{\text{hips}, y} = \frac{\text{body\_hips\_d}}{\text{raw\_hips\_d}} \cdot 1.10$$
+   - **Convex Pelvic Rise & Centerline Taper**:
+     Between crotch and hips ($u \le u_{\text{hips}}$), retain hip scale and anchor `target_cy = body_hips_center_y`. Between hips and waist ($u > u_{\text{hips}}$), apply convex blend ($t^{1.8}$ where $t = \frac{u - u_{\text{hips}}}{1 - u_{\text{hips}}}$) to smoothly taper both width/depth scales and $Y$-center into the waistline.
+   - **Anterior Fly Ease**:
+     Apply subtle anterior ease ($-0.007\text{m}$) when $ry < p_{\text{waist\_center\_y}}$ to envelope the lower abdomen and front fly cleanly while keeping the posterior seat 100% flush within the suit jacket back hem.
+4. **Leg Bone Centerline Tracking, Cuff Tapering & Sagittal Clearance**:
+   - Raw pants legs sit at canonical positions ($X \approx \pm 0.250\text{m}$). Avatars vary widely in stance width (e.g. female ankle $X \approx \pm 0.065\text{m}$ vs male $\pm 0.129\text{m}$).
+   - Sample the leg bone vector piecewise along `mixamorig_*UpLeg` $\to$ `mixamorig_*Leg` $\to$ `mixamorig_*Foot`.
+   - Apply smooth cosine blend factor $w(u) = \cos(\frac{\pi}{2} u^2)$ where $u \in [0, 1]$ is normalized distance from ankle ($u=0$) to crotch ($u=1$), transitioning smoothly from leg bone tracking into the unified pelvis.
+   - Scale leg tube width down towards cuff: $\text{scale}_{\text{cuff}, x} = \min(\text{scale}_{\text{hips}, x}, \max(0.28, \frac{\text{body\_ankle\_w} \cdot 1.08}{\text{raw\_cuff\_w}}))$, preventing oversized cuffs from colliding or overlapping between the ankles.
+   - **Sagittal Medial Invariance**: Apply medial clearance below crotch ($\text{medial\_clearance} = 0.008 \cdot (1.0 - u)$), guaranteeing left leg vertices remain strictly at $X \ge \text{medial\_clearance}$ and right leg vertices at $X \le -\text{medial\_clearance}$.
+5. **Anatomical Calf Gastrocnemius Clearance**:
+   - The gastrocnemius muscle peak sits at 72% between ankle and knee:
+     $$Z_{\text{calf\_peak}} = Z_{\text{foot}} + 0.72 \cdot (Z_{\text{knee}} - Z_{\text{foot}})$$
+   - Directional posterior ease ($\text{calf\_boost}_y = 0.15 \cdot \text{calf\_factor}$ when $\Delta Y > 0$) and circumferential lateral/medial ease ($\text{calf\_boost}_x = 0.08 \cdot \text{calf\_factor}$) envelope the entire gastrocnemius belly without poke-through or shin bagginess:
+     $$\text{rad\_clearance}_x = 1.04 + \text{calf\_boost}_x, \quad \text{rad\_clearance}_y = 1.08 + \text{calf\_boost}_y$$
+6. **Strict Cross-Limb & Lower-Leg Weight Cleansing (Zero Leg Sticking)**:
+   - Skinning lower garments via `DATA_TRANSFER` inevitably transfers opposite-leg weights at the crotch apex, and erroneously assigns pelvis/`mixamorig_Hips` weights to lower legs when stances are narrow.
+   - If lower leg/shin vertices have `mixamorig_Hips` weights, they remain pinned to the stationary pelvis during kicks/dance steps, creating severe sticky webbing ("粘在一起").
+   - **Sanitization Rules**:
+     1. Below crotch ($Z < Z_{\text{crotch}} - 0.02\text{m}$): reassign all opposite-leg weights directly to the corresponding same-side leg bone (`LeftLeg`/`LeftUpLeg` or `RightLeg`/`RightUpLeg`), **never** to `Hips`.
+     2. Lower legs ($Z < Z_{\text{crotch}} - 0.05\text{m}$): strip all `mixamorig_Hips` weights completely and transfer them to the leg bone (`LeftLeg`/`RightLeg`), ensuring 100% leg articulation independence.
+     3. Center crotch apex ($|X| \le 5\text{mm}$ and $Z \ge Z_{\text{crotch}} - 0.02\text{m}$): reassign leg weights to `mixamorig_Hips` to maintain seamless groin curvature.
 
 ---
 
@@ -137,6 +175,32 @@ python human-composer.py bind \
   --intermediate \
   --preview \
   --output-dir outputs/test_woman_suit
+
+# Male Avatar (Pants)
+python human-composer.py bind \
+  --body tests/man_anim_base.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_man_pants
+
+# Female Avatar (Pants)
+python human-composer.py bind \
+  --body tests/woman_anim_base.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_woman_pants
+
+# Full Ensemble (Hair + Suit + Pants)
+python human-composer.py bind \
+  --body tests/man_anim_base.usdz \
+  --hair tests/man_hair.usdz \
+  --upper tests/man_suit.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_man_full_ensemble
 ```
 
 ### 2. Required Inspection Angles (Check All 5!)

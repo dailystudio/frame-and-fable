@@ -205,6 +205,377 @@ def bind_and_skin_garment(garment_mesh, body_mesh, armature, root_empty=None):
     print(f"[Blender Binder] Rigged upper garment '{garment_mesh.name}' with {len(garment_mesh.vertex_groups)} vertex groups.")
 
 
+def align_lower_garment(lower_mesh, body_mesh, armature):
+    """
+    Align lower garment (e.g. trousers, pants) to body using skeletal landmarks:
+    waist (Spine bone), hips, leg bones (UpLeg, Leg, Foot).
+    Performs proportional scaling, vertical height mapping (waist, crotch, ankles),
+    limb bone centerline alignment, gluteal/calf clearances, and seamless crotch closure.
+    """
+    l_upleg_b = armature.data.bones.get("mixamorig_LeftUpLeg") or armature.data.bones.get("LeftUpLeg")
+    r_upleg_b = armature.data.bones.get("mixamorig_RightUpLeg") or armature.data.bones.get("RightUpLeg")
+    l_leg_b = armature.data.bones.get("mixamorig_LeftLeg") or armature.data.bones.get("LeftLeg")
+    r_leg_b = armature.data.bones.get("mixamorig_RightLeg") or armature.data.bones.get("RightLeg")
+    l_foot_b = armature.data.bones.get("mixamorig_LeftFoot") or armature.data.bones.get("LeftFoot")
+    r_foot_b = armature.data.bones.get("mixamorig_RightFoot") or armature.data.bones.get("RightFoot")
+    spine_b = armature.data.bones.get("mixamorig_Spine") or armature.data.bones.get("Spine")
+    hips_b = armature.data.bones.get("mixamorig_Hips") or armature.data.bones.get("Hips")
+
+    if not (l_upleg_b and r_upleg_b and l_leg_b and r_leg_b and l_foot_b and r_foot_b and spine_b and hips_b):
+        return
+
+    p_lupleg = armature.matrix_world @ l_upleg_b.head_local
+    p_rupleg = armature.matrix_world @ r_upleg_b.head_local
+    p_lknee = armature.matrix_world @ l_leg_b.head_local
+    p_rknee = armature.matrix_world @ r_leg_b.head_local
+    p_lfoot = armature.matrix_world @ l_foot_b.head_local
+    p_rfoot = armature.matrix_world @ r_foot_b.head_local
+    p_spine = armature.matrix_world @ spine_b.head_local
+    p_hips = armature.matrix_world @ hips_b.head_local
+
+    bpts = np.array([v.co for v in body_mesh.data.vertices])
+
+    body_leg_len = (p_hips.z - p_lfoot.z)
+    ref_leg_len = 0.5452
+    leg_ratio = body_leg_len / ref_leg_len
+
+    # Natural waistline target (sitting comfortably at the waist above underwear)
+    target_waist_z = float(p_spine.z + 0.050 * leg_ratio)
+    target_ankle_z = float((p_lfoot.z + p_rfoot.z) / 2.0 + 0.012)
+
+    # Detect lowest crotch vertex on body
+    crotch_search = bpts[(np.abs(bpts[:, 0]) < 0.025) & (bpts[:, 2] > p_lknee.z + 0.05) & (bpts[:, 2] < p_lupleg.z + 0.1)]
+    body_crotch_min_z = float(crotch_search[:, 2].min()) if len(crotch_search) > 0 else float((p_lupleg.z + p_rupleg.z) / 2.0 - 0.10)
+
+    # Trouser crotch target: 20mm below lowest body crotch vertex
+    target_crotch_z = float(body_crotch_min_z - 0.020)
+
+    # Body waist & hips cross sections
+    waist_bpts = bpts[np.abs(bpts[:, 2] - target_waist_z) < 0.025]
+    body_waist_w = float(waist_bpts[:, 0].ptp()) if len(waist_bpts) > 0 else 0.35
+    body_waist_d = float(waist_bpts[:, 1].ptp()) if len(waist_bpts) > 0 else 0.28
+    body_waist_center_y = float((waist_bpts[:, 1].min() + waist_bpts[:, 1].max()) / 2.0) if len(waist_bpts) > 0 else 0.0
+
+    # Regional pelvic scan across greater trochanters & glutes (accommodates curvier female and muscular male hips)
+    hips_zone_z_min = target_crotch_z + 0.30 * (p_hips.z - target_crotch_z)
+    hips_zone_z_max = p_hips.z + 0.030
+    pelvis_slice_widths = []
+    pelvis_slice_depths = []
+    pelvis_slice_cys = []
+    for z_s in np.arange(hips_zone_z_min, hips_zone_z_max, 0.015):
+        sl = bpts[np.abs(bpts[:, 2] - z_s) < 0.012]
+        if len(sl) > 0:
+            pelvis_slice_widths.append(float(sl[:, 0].ptp()))
+            pelvis_slice_depths.append(float(sl[:, 1].ptp()))
+            pelvis_slice_cys.append(float((sl[:, 1].min() + sl[:, 1].max()) / 2.0))
+
+    body_hips_w = max(pelvis_slice_widths) if pelvis_slice_widths else 0.42
+    body_hips_d = max(pelvis_slice_depths) if pelvis_slice_depths else 0.32
+    body_hips_center_y = float(np.mean(pelvis_slice_cys)) if pelvis_slice_cys else 0.0
+
+    # Pants raw geometry
+    ppts = np.array([v.co for v in lower_mesh.data.vertices])
+    p_z_min = float(ppts[:, 2].min())
+    p_z_max = float(ppts[:, 2].max())
+
+    p_center_pts = ppts[np.abs(ppts[:, 0]) < 0.018]
+    p_crotch_z = float(p_center_pts[:, 2].min()) if len(p_center_pts) > 0 else (p_z_min + 0.63 * (p_z_max - p_z_min))
+
+    p_waist_pts = ppts[ppts[:, 2] > p_z_max - 0.05]
+    p_waist_w = float(p_waist_pts[:, 0].ptp())
+    p_waist_d = float(p_waist_pts[:, 1].ptp())
+    p_waist_center_y = float((p_waist_pts[:, 1].min() + p_waist_pts[:, 1].max()) / 2.0)
+
+    # Ankle measurements for tailoring cuff width
+    ankle_bpts = bpts[np.abs(bpts[:, 2] - target_ankle_z) < 0.025]
+    left_ankle_bpts = ankle_bpts[ankle_bpts[:, 0] > 0]
+    body_ankle_w = float(left_ankle_bpts[:, 0].ptp()) if len(left_ankle_bpts) > 0 else 0.11
+
+    raw_cuff_pts = ppts[(ppts[:, 2] < p_z_min + 0.05) & (ppts[:, 0] > 0)]
+    raw_cuff_w = float(raw_cuff_pts[:, 0].ptp()) if len(raw_cuff_pts) > 0 else 0.368
+
+    p_hips_pts = ppts[(ppts[:, 2] >= p_crotch_z + 0.20 * (p_z_max - p_crotch_z)) & (ppts[:, 2] <= p_crotch_z + 0.70 * (p_z_max - p_crotch_z))]
+    p_hips_w = float(p_hips_pts[:, 0].ptp()) if len(p_hips_pts) > 0 else 0.94
+    p_hips_d = float(p_hips_pts[:, 1].ptp()) if len(p_hips_pts) > 0 else 0.73
+
+    # Slim-fit tapered scaling:
+    # Waist attaches closely to body with 8% ease
+    waist_ease = 1.08
+    target_waist_scale_x = (body_waist_w / p_waist_w) * waist_ease
+    target_waist_scale_y = (body_waist_d / p_waist_d) * waist_ease
+
+    # Hips fits comfortably with 10% ease
+    hips_ease = 1.10
+    target_hips_scale_x = (body_hips_w / p_hips_w) * hips_ease
+    target_hips_scale_y = (body_hips_d / p_hips_d) * hips_ease
+
+    target_cuff_scale_x = min(target_hips_scale_x, max(0.28, (body_ankle_w * 1.08) / raw_cuff_w))
+
+    # Legs use hips scale for smooth continuity into thighs
+    leg_scale_x = target_hips_scale_x
+    leg_scale_y = target_hips_scale_y
+
+    u_hips = (p_hips.z - target_crotch_z) / (target_waist_z - target_crotch_z)
+
+    print(f"[Blender Binder] Lower garment target waist Z: {target_waist_z:.3f}m, crotch Z: {target_crotch_z:.3f}m, ankle Z: {target_ankle_z:.3f}m")
+    print(f"[Blender Binder] Lower garment waist scale: X={target_waist_scale_x:.4f}, Y={target_waist_scale_y:.4f} (slim-fit)")
+    print(f"[Blender Binder] Lower garment hips scale:  X={target_hips_scale_x:.4f}, Y={target_hips_scale_y:.4f}")
+    print(f"[Blender Binder] Lower garment cuff scale:  X={target_cuff_scale_x:.4f}")
+
+    new_coords = np.zeros_like(ppts)
+    for i, pt in enumerate(ppts):
+        rx, ry, rz = pt[0], pt[1], pt[2]
+
+        # Piecewise vertical height mapping
+        if rz <= p_crotch_z:
+            u = (rz - p_z_min) / (p_crotch_z - p_z_min)
+            vz = target_ankle_z + u * (target_crotch_z - target_ankle_z)
+        else:
+            u = (rz - p_crotch_z) / (p_z_max - p_crotch_z)
+            vz = target_crotch_z + u * (target_waist_z - target_crotch_z)
+
+        if rz > p_crotch_z:
+            pelvis_u = (rz - p_crotch_z) / (p_z_max - p_crotch_z)
+
+            # Smooth convex taper from hips to waist
+            if pelvis_u <= u_hips:
+                cur_scale_x = target_hips_scale_x
+                cur_scale_y = target_hips_scale_y
+                target_cy = body_hips_center_y
+            else:
+                t = (pelvis_u - u_hips) / (1.0 - u_hips)
+                blend = t ** 1.8
+                cur_scale_x = target_hips_scale_x + blend * (target_waist_scale_x - target_hips_scale_x)
+                cur_scale_y = target_hips_scale_y + blend * (target_waist_scale_y - target_hips_scale_y)
+                target_cy = body_hips_center_y + blend * (body_waist_center_y - body_hips_center_y)
+
+            # Anterior ease: subtle forward offset for fly/abdominal curvature
+            anterior_ease = -0.007 if ry < p_waist_center_y else 0.0
+
+            vx = rx * cur_scale_x
+            vy = target_cy + (ry - p_waist_center_y) * cur_scale_y + anterior_ease
+        else:
+            leg_u = (rz - p_z_min) / (p_crotch_z - p_z_min)
+            is_left = (rx >= 0)
+
+            # Taper leg tube width towards the ankle cuff to avoid wide cuffs merging
+            cur_leg_scale_x = target_cuff_scale_x + leg_u * (target_hips_scale_x - target_cuff_scale_x)
+
+            bone_upleg = p_lupleg if is_left else p_rupleg
+            bone_knee = p_lknee if is_left else p_rknee
+            bone_foot = p_lfoot if is_left else p_rfoot
+
+            # Interpolate bone coordinates along leg
+            if leg_u < 0.5:
+                s = leg_u / 0.5
+                bone_x = bone_foot.x + s * (bone_knee.x - bone_foot.x)
+                bone_y = bone_foot.y + s * (bone_knee.y - bone_foot.y)
+            else:
+                s = (leg_u - 0.5) / 0.5
+                bone_x = bone_knee.x + s * (bone_upleg.x - bone_knee.x)
+                bone_y = bone_knee.y + s * (bone_upleg.y - bone_knee.y)
+
+            raw_center_x = 0.250 if is_left else -0.250
+            raw_center_y = -0.048
+
+            scaled_center_x = raw_center_x * cur_leg_scale_x
+            scaled_center_y = body_hips_center_y + (raw_center_y - p_waist_center_y) * leg_scale_y
+
+            shift_x = bone_x - scaled_center_x
+            shift_y = bone_y - scaled_center_y
+
+            # Smooth bone shift transition: full tracking along leg, blending into pelvis near crotch
+            shift_weight = math.cos((math.pi / 2.0) * (leg_u ** 2.0))
+
+            # Anatomical gastrocnemius center (72% up from foot to knee)
+            calf_mid_z = bone_foot.z + 0.72 * (bone_knee.z - bone_foot.z)
+            calf_dist = abs(vz - calf_mid_z)
+            calf_factor = max(0.0, 1.0 - (calf_dist / 0.16)**2)
+
+            vx_unscaled = rx * cur_leg_scale_x
+            vy_unscaled = body_hips_center_y + (ry - p_waist_center_y) * leg_scale_y
+
+            dx = vx_unscaled - scaled_center_x
+            dy = vy_unscaled - scaled_center_y
+
+            # Posterior and circumferential calf boost for gastrocnemius muscle clearance
+            calf_boost_y = 0.15 * calf_factor if dy > 0 else 0.0
+            calf_boost_x = 0.08 * calf_factor
+
+            rad_clearance_x = 1.04 + calf_boost_x
+            rad_clearance_y = 1.08 + calf_boost_y
+
+            vx = scaled_center_x + shift_x * shift_weight + dx * rad_clearance_x
+            vy = scaled_center_y + shift_y * shift_weight + dy * rad_clearance_y
+
+            # Sagittal medial clearance: guarantee legs stay strictly on their own anatomical sides
+            medial_clearance = 0.008 * (1.0 - leg_u)
+            if is_left:
+                vx = max(vx, medial_clearance)
+            else:
+                vx = min(vx, -medial_clearance)
+
+        new_coords[i] = (vx, vy, vz)
+
+    for i, v in enumerate(lower_mesh.data.vertices):
+        v.co.x = new_coords[i, 0]
+        v.co.y = new_coords[i, 1]
+        v.co.z = new_coords[i, 2]
+
+    lower_mesh.data.update()
+    print("[Blender Binder] Lower garment anatomical alignment and deformation complete.")
+
+
+def bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty=None):
+    """
+    Skin lower garment to the armature by transferring vertex weights directly from the clean body mesh.
+    Prunes upper-body and arm vertex groups, reassigning Spine1/Spine2 to Spine so upper body/arms
+    do not pull on the lower garment.
+    """
+    # 1. Transfer vertex weights from clean body mesh
+    mod_dt = lower_mesh.modifiers.new(name="DataTransfer", type="DATA_TRANSFER")
+    mod_dt.object = body_mesh
+    mod_dt.use_vert_data = True
+    mod_dt.data_types_verts = {"VGROUP_WEIGHTS"}
+    mod_dt.vert_mapping = "POLYINTERP_NEAREST"
+    bpy.context.view_layer.objects.active = lower_mesh
+    lower_mesh.select_set(True)
+    bpy.ops.object.datalayout_transfer(modifier="DataTransfer")
+    bpy.ops.object.modifier_apply(modifier="DataTransfer")
+
+    # 2. Weight sanitization: prune non-lower vertex groups
+    keep_prefixes = [
+        "mixamorig_Hips", "mixamorig_Spine", "mixamorig_LeftUpLeg", "mixamorig_RightUpLeg",
+        "mixamorig_LeftLeg", "mixamorig_RightLeg", "mixamorig_LeftFoot", "mixamorig_RightFoot",
+        "mixamorig_LeftToeBase", "mixamorig_RightToeBase",
+        "Hips", "Spine", "LeftUpLeg", "RightUpLeg",
+        "LeftLeg", "RightLeg", "LeftFoot", "RightFoot",
+        "LeftToeBase", "RightToeBase"
+    ]
+    spine_vg = lower_mesh.vertex_groups.get("mixamorig_Spine") or lower_mesh.vertex_groups.get("Spine")
+    removed_count = 0
+    for vg in list(lower_mesh.vertex_groups):
+        vg_name = vg.name
+        if vg_name in ("mixamorig_Spine1", "mixamorig_Spine2", "Spine1", "Spine2"):
+            if spine_vg:
+                for v in lower_mesh.data.vertices:
+                    for g in v.groups:
+                        if g.group == vg.index and g.weight > 0:
+                            spine_vg.add([v.index], g.weight, "ADD")
+            lower_mesh.vertex_groups.remove(vg)
+            removed_count += 1
+        elif not any(vg_name.startswith(p) for p in keep_prefixes):
+            lower_mesh.vertex_groups.remove(vg)
+            removed_count += 1
+
+    print(f"[Blender Binder] Lower garment weight sanitization: pruned {removed_count} upper-body/arm vertex groups, retained {len(lower_mesh.vertex_groups)} groups.")
+
+    # 2.5 Strict cross-limb weight sanitization (prevents legs from pulling/sticking together in animation)
+    left_leg_vgs = [vg for vg in lower_mesh.vertex_groups if any(k in vg.name for k in ["LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase"])]
+    right_leg_vgs = [vg for vg in lower_mesh.vertex_groups if any(k in vg.name for k in ["RightUpLeg", "RightLeg", "RightFoot", "RightToeBase"])]
+    hips_vg = lower_mesh.vertex_groups.get("mixamorig_Hips") or lower_mesh.vertex_groups.get("Hips")
+
+    l_upleg_vg = lower_mesh.vertex_groups.get("mixamorig_LeftUpLeg") or lower_mesh.vertex_groups.get("LeftUpLeg")
+    r_upleg_vg = lower_mesh.vertex_groups.get("mixamorig_RightUpLeg") or lower_mesh.vertex_groups.get("RightUpLeg")
+    l_leg_vg = lower_mesh.vertex_groups.get("mixamorig_LeftLeg") or lower_mesh.vertex_groups.get("LeftLeg")
+    r_leg_vg = lower_mesh.vertex_groups.get("mixamorig_RightLeg") or lower_mesh.vertex_groups.get("RightLeg")
+
+    # Detect crotch reference height for separating pelvis basin from independent leg tubes
+    l_upleg_b = armature.data.bones.get("mixamorig_LeftUpLeg") or armature.data.bones.get("LeftUpLeg")
+    r_upleg_b = armature.data.bones.get("mixamorig_RightUpLeg") or armature.data.bones.get("RightUpLeg")
+    if l_upleg_b and r_upleg_b:
+        p_lupleg = armature.matrix_world @ l_upleg_b.head_local
+        p_rupleg = armature.matrix_world @ r_upleg_b.head_local
+        crotch_ref_z = (p_lupleg.z + p_rupleg.z) / 2.0 - 0.08
+    else:
+        crotch_ref_z = 0.50
+
+    left_vg_map = {vg.index: vg for vg in left_leg_vgs}
+    right_vg_map = {vg.index: vg for vg in right_leg_vgs}
+
+    cross_cleaned = 0
+    lower_hips_cleaned = 0
+    for v in lower_mesh.data.vertices:
+        vx = v.co.x
+        vz = v.co.z
+        v_groups = [(g.group, g.weight) for g in v.groups if g.weight > 0]
+        if vx > 0.005:
+            # Left leg side (+X): clear any right leg weights
+            for grp_idx, w in v_groups:
+                if grp_idx in right_vg_map:
+                    if vz < crotch_ref_z - 0.02:
+                        target_l_vg = l_leg_vg if "Leg" in right_vg_map[grp_idx].name or "Foot" in right_vg_map[grp_idx].name else l_upleg_vg
+                        if target_l_vg:
+                            target_l_vg.add([v.index], w, "ADD")
+                    else:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                    right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                    cross_cleaned += 1
+
+            # Remove erroneous Hips weights on lower leg/shins/cuffs (vz < crotch_ref_z - 0.05)
+            if vz < crotch_ref_z - 0.05 and hips_vg:
+                for grp_idx, w in v_groups:
+                    if grp_idx == hips_vg.index:
+                        target_l_vg = l_leg_vg if vz < (crotch_ref_z - 0.15) else l_upleg_vg
+                        if target_l_vg:
+                            target_l_vg.add([v.index], w, "ADD")
+                        hips_vg.add([v.index], 0.0, "REPLACE")
+                        lower_hips_cleaned += 1
+
+        elif vx < -0.005:
+            # Right leg side (-X): clear any left leg weights
+            for grp_idx, w in v_groups:
+                if grp_idx in left_vg_map:
+                    if vz < crotch_ref_z - 0.02:
+                        target_r_vg = r_leg_vg if "Leg" in left_vg_map[grp_idx].name or "Foot" in left_vg_map[grp_idx].name else r_upleg_vg
+                        if target_r_vg:
+                            target_r_vg.add([v.index], w, "ADD")
+                    else:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                    left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                    cross_cleaned += 1
+
+            # Remove erroneous Hips weights on lower leg/shins/cuffs (vz < crotch_ref_z - 0.05)
+            if vz < crotch_ref_z - 0.05 and hips_vg:
+                for grp_idx, w in v_groups:
+                    if grp_idx == hips_vg.index:
+                        target_r_vg = r_leg_vg if vz < (crotch_ref_z - 0.15) else r_upleg_vg
+                        if target_r_vg:
+                            target_r_vg.add([v.index], w, "ADD")
+                        hips_vg.add([v.index], 0.0, "REPLACE")
+                        lower_hips_cleaned += 1
+        else:
+            # Center crotch apex (|X| <= 5mm): assign to hips and clear both leg weights
+            for grp_idx, w in v_groups:
+                if grp_idx in left_vg_map:
+                    if hips_vg:
+                        hips_vg.add([v.index], w, "ADD")
+                    left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                    cross_cleaned += 1
+                elif grp_idx in right_vg_map:
+                    if hips_vg:
+                        hips_vg.add([v.index], w, "ADD")
+                    right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                    cross_cleaned += 1
+
+    print(f"[Blender Binder] Sanitized {cross_cleaned} cross-limb and {lower_hips_cleaned} lower-leg hips vertex group assignments.")
+
+    # 3. Parent to armature
+    if root_empty:
+        lower_mesh.parent = root_empty
+        lower_mesh.matrix_parent_inverse = root_empty.matrix_world.inverted()
+    else:
+        lower_mesh.parent = armature
+        lower_mesh.matrix_parent_inverse = armature.matrix_world.inverted()
+
+    # 4. Add Armature modifier
+    mod_arm = lower_mesh.modifiers.new(name="Armature", type="ARMATURE")
+    mod_arm.object = armature
+    print(f"[Blender Binder] Rigged lower garment '{lower_mesh.name}' with {len(lower_mesh.vertex_groups)} vertex groups.")
+
+
 def update_material_texture(mesh_obj, mat_name, tex_path):
     """Ensure the mesh object's material uses the specified texture image."""
     if not mesh_obj or not mesh_obj.data.materials:
@@ -243,6 +614,7 @@ def main():
     body_usdz = config["body"]
     hair_usdz = config.get("hair")
     upper_usdz = config.get("upper")
+    lower_usdz = config.get("lower")
     output_usdz = config["output_usdz"]
     preview_image_path = config.get("preview_image_path")
     preview_video_path = config.get("preview_video_path")
@@ -254,6 +626,7 @@ def main():
     body_extract_dir = os.path.join(temp_root, "body_unpacked")
     hair_extract_dir = os.path.join(temp_root, "hair_unpacked") if hair_usdz else None
     upper_extract_dir = os.path.join(temp_root, "upper_unpacked") if upper_usdz else None
+    lower_extract_dir = os.path.join(temp_root, "lower_unpacked") if lower_usdz else None
 
     try:
         print("[Blender Binder] Unpacking USDZ archives...")
@@ -272,6 +645,12 @@ def main():
             safe_extract_usdz(upper_usdz, upper_extract_dir)
             upper_tex = isolate_part_texture(upper_extract_dir, "upper")
             print(f"[Blender Binder] Upper garment texture: {upper_tex}")
+
+        lower_tex = None
+        if lower_usdz:
+            safe_extract_usdz(lower_usdz, lower_extract_dir)
+            lower_tex = isolate_part_texture(lower_extract_dir, "lower")
+            print(f"[Blender Binder] Lower garment texture: {lower_tex}")
 
         # Reset Blender scene
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -538,6 +917,32 @@ def main():
             # Rig and skin to armature via clean body vertex weight transfer
             bind_and_skin_garment(upper_mesh, body_mesh, armature, root_empty)
             bound_parts["upper"] = upper_mesh
+
+        # 4. Import & Bind Lower Garment USDZ (if provided)
+        if lower_usdz:
+            existing_objs = set(bpy.context.scene.objects)
+            print(f"[Blender Binder] Importing lower garment USDZ: {lower_usdz}")
+            bpy.ops.wm.usd_import(filepath=lower_usdz)
+
+            new_objs = [o for o in bpy.context.scene.objects if o not in existing_objs]
+            lower_mesh = None
+            for o in new_objs:
+                if o.type == "MESH":
+                    lower_mesh = o
+                elif o.type == "EMPTY" and o.name.startswith("_materials"):
+                    bpy.data.objects.remove(o)
+
+            if not lower_mesh:
+                raise RuntimeError("Failed to locate lower garment mesh in imported USDZ.")
+
+            update_material_texture(lower_mesh, "Lower_Material", lower_tex)
+
+            # Align lower garment against clean body landmarks
+            align_lower_garment(lower_mesh, body_mesh, armature)
+
+            # Rig and skin to armature via clean body vertex weight transfer
+            bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty)
+            bound_parts["lower"] = lower_mesh
 
         # 8. Export Bound USDZ
         print(f"[Blender Binder] Exporting USDZ to {output_usdz}...")

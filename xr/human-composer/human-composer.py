@@ -128,8 +128,8 @@ def handle_bind(args):
         print(f"[Error] Body model not found: {args.body}", file=sys.stderr)
         sys.exit(1)
 
-    if not args.hair and not args.upper:
-        print("[Error] Please specify at least one accessory or garment to bind: --hair <path> or --upper <path>", file=sys.stderr)
+    if not args.hair and not args.upper and not args.lower:
+        print("[Error] Please specify at least one accessory or garment to bind: --hair <path>, --upper <path>, or --lower <path>", file=sys.stderr)
         sys.exit(1)
 
     if args.hair and not os.path.exists(args.hair):
@@ -138,6 +138,10 @@ def handle_bind(args):
 
     if args.upper and not os.path.exists(args.upper):
         print(f"[Error] Upper garment model not found: {args.upper}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.lower and not os.path.exists(args.lower):
+        print(f"[Error] Lower garment model not found: {args.lower}", file=sys.stderr)
         sys.exit(1)
 
     model_name = derive_model_name(args.body, args.name)
@@ -176,6 +180,8 @@ def handle_bind(args):
         print(f"[Human Composer] Hair: {args.hair}")
     if args.upper:
         print(f"[Human Composer] Upper: {args.upper}")
+    if args.lower:
+        print(f"[Human Composer] Lower: {args.lower}")
     print(f"[Human Composer] Model Directory: {model_dir}")
     print(f"[Human Composer] Target USDZ: {output_usdz}")
     if preview_img_path:
@@ -213,6 +219,7 @@ def handle_bind(args):
             "body": os.path.abspath(args.body),
             "hair": os.path.abspath(args.hair) if args.hair else None,
             "upper": os.path.abspath(args.upper) if args.upper else None,
+            "lower": os.path.abspath(args.lower) if args.lower else None,
             "anim": os.path.abspath(args.anim) if args.anim else None,
             "output_usdz": output_usdz,
             "preview_image_path": preview_img_path,
@@ -318,6 +325,9 @@ def main():
     )
     bind_parser.add_argument(
         "--upper", default=None, help="Path to input upper garment USDZ model (e.g. suit, shirt, jacket)."
+    )
+    bind_parser.add_argument(
+        "--lower", default=None, help="Path to input lower garment USDZ model (e.g. pants, trousers, skirt)."
     )
     bind_parser.add_argument(
         "--ref-front", default=None, help="Path to front reference image."

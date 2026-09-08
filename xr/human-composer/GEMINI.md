@@ -15,16 +15,16 @@ Welcome to **Human Composer**, the automated 3D character composition and access
                +----------------------------------+
                | Clean Body Mesh & Clean Armature |
                +----------------------------------+
-                    |                        |
-     (Bind in isolation)          (Bind in isolation)
-                    v                        v
-          +-------------------+    +--------------------+
-          |    Hair Model     |    |   Upper Garment    |
-          |  (Scalp Geometry) |    |  (Weight Transfer) |
-          +-------------------+    +--------------------+
-                    \                        /
-                     \                      /
-                      v                    v
+                 /              |               \
+   (In isolation)        (In isolation)    (In isolation)
+               v                v                v
+      +----------------+ +----------------+ +----------------+
+      |   Hair Model   | | Upper Garment  | | Lower Garment  |
+      | (Scalp Align)  | |(WeightTransfer)| |(WeightTransfer)|
+      +----------------+ +----------------+ +----------------+
+               \                |               /
+                \               |              /
+                 v              v             v
                +----------------------------------+
                | Unified Scene Composite & Export |
                |     (Zero Weight Pollution)      |
@@ -39,10 +39,11 @@ Welcome to **Human Composer**, the automated 3D character composition and access
 +------------------------+             +-----------------------+
 ```
 
-1. **Isolated Binding on Clean Body**: Every accessory or garment (`--hair`, `--upper`, future `--lower`, `--shoes`) is bound in isolation against the clean base body and armature. Never chain bindings sequentially.
-2. **Skinning via Data Transfer**: Vertex weights are transferred from the clean body using Blender's `DATA_TRANSFER` modifier (`NEAREST_POLYNORMAL`), avoiding heat-diffusion cross-limb bridging.
-3. **Weight Sanitization**: Upper garments strip `mixamorig_Head` weights and reassign them to `mixamorig_Neck` to prevent collar stretching during head motion.
-4. **Bone-Axis Centerline Alignment**: Sleeves and limb tubes are aligned to their respective bone axes ($Y_{\text{bone}}(u)$), preventing the forward chest offset from causing rear triceps/elbow penetration.
+1. **Isolated Binding on Clean Body**: Every accessory or garment (`--hair`, `--upper`, `--lower`, future `--shoes`) is bound in isolation against the clean base body and armature. Never chain bindings sequentially.
+2. **Skinning via Data Transfer**: Vertex weights are transferred from the clean body using Blender's `DATA_TRANSFER` modifier (`POLYINTERP_NEAREST`), avoiding heat-diffusion cross-limb bridging.
+3. **Weight Sanitization & Cleansing**: Upper garments strip `mixamorig_Head` weights and reassign them to `mixamorig_Neck`. Lower garments prune all upper-body/arm weights, reassign `mixamorig_Spine1`/`mixamorig_Spine2` to `mixamorig_Spine`, and reassign crotch-apex cross-limb weights to `mixamorig_Hips`. Below the crotch, cross-limb weights are strictly reassigned to the corresponding same-side leg bone, and all erroneous `mixamorig_Hips` weights on lower legs/shins are transferred to leg bones, preventing any sticky webbing ("粘在一起") during dynamic leg animation.
+4. **Bone-Axis Centerline Alignment, Cuff Tapering & Sagittal Clearance**: Sleeves and pant legs are aligned to their respective bone axes ($Y_{\text{bone}}(u)$, leg bone polyline), ensuring proper volume clearance around limbs without poke-through. Pant cuffs taper down proportionally to the avatar's ankle width ($R_{\text{ankle}} \times 1.08$) with strict sagittal medial clearance below the crotch to guarantee full leg independence and clean air gap between ankles.
+5. **Regional Pelvic & Gastrocnemius Clearance**: Lower garment crotch is dynamically positioned 2cm below the lowest body perineum vertex ($Z_{\text{body\_crotch\_min}} - 0.020\text{m}$). The pelvis volume is scanned across greater trochanters and glutes with synchronized centerline tapering and anterior ease. The calf region applies circumferential and directional gastrocnemius muscle clearance ($\text{calf\_boost}_x = 0.08 \cdot \text{calf\_factor}$, $\text{calf\_boost}_y = 0.15 \cdot \text{calf\_factor}$), eliminating poke-through across both male and female body silhouettes.
 
 ---
 
@@ -69,11 +70,38 @@ python human-composer.py bind \
   --preview \
   --output-dir outputs/test_woman_suit
 
-# 4. Generate 3-Phase Showcase Animation Video (MP4)
+# 4. Bind Male Avatar (Pants)
+python human-composer.py bind \
+  --body tests/man_anim_base.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_man_pants
+
+# 5. Bind Female Avatar (Pants)
+python human-composer.py bind \
+  --body tests/woman_anim_base.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_woman_pants
+
+# 6. Full Male Ensemble (Hair + Suit + Pants)
 python human-composer.py bind \
   --body tests/man_anim_base.usdz \
   --hair tests/man_hair.usdz \
   --upper tests/man_suit.usdz \
+  --lower tests/man_pants.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_man_full_ensemble
+
+# 7. Generate 3-Phase Showcase Animation Video (MP4)
+python human-composer.py bind \
+  --body tests/man_anim_base.usdz \
+  --hair tests/man_hair.usdz \
+  --upper tests/man_suit.usdz \
+  --lower tests/man_pants.usdz \
   --anim tests/anim_hip_hop.usda \
   --preview-anim \
   --output-dir outputs/test_anim
