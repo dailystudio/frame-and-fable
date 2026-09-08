@@ -21,7 +21,8 @@ This document provides the foundational principles, architecture, binding standa
 - `outputs/`: Output directory structure per model:
   ```text
   outputs/<model_name>/
-  ├── <model_name>_bound.usdz       # Final bound USDZ model
+  ├── <model_name>_bound.usdz       # Final bound USDZ model (canonical T-pose)
+  ├── <model_name>_animated.usdz    # Final bound USDZ model with embedded skeletal animation (when --anim provided)
   ├── preview.png                   # High-res orthographic static render
   ├── preview_animation.mp4         # Sequenced 3-phase preview animation video
   └── intermediates/                # Multi-angle inspection & verification renders

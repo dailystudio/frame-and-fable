@@ -151,13 +151,19 @@ def handle_bind(args):
         if args.output.endswith(".usdz"):
             output_usdz = os.path.abspath(args.output)
             model_dir = os.path.dirname(output_usdz)
+            base_stem, _ = os.path.splitext(output_usdz)
+            if base_stem.endswith("_bound"):
+                base_stem = base_stem[:-6]
+            output_anim_usdz = f"{base_stem}_animated.usdz" if args.anim else None
         else:
             model_dir = os.path.abspath(args.output)
             output_usdz = os.path.join(model_dir, f"{model_name}_bound.usdz")
+            output_anim_usdz = os.path.join(model_dir, f"{model_name}_animated.usdz") if args.anim else None
     else:
         root_outputs = os.path.abspath(args.output_dir)
         model_dir = os.path.join(root_outputs, model_name)
         output_usdz = os.path.join(model_dir, f"{model_name}_bound.usdz")
+        output_anim_usdz = os.path.join(model_dir, f"{model_name}_animated.usdz") if args.anim else None
 
     os.makedirs(model_dir, exist_ok=True)
 
@@ -184,6 +190,8 @@ def handle_bind(args):
         print(f"[Human Composer] Lower: {args.lower}")
     print(f"[Human Composer] Model Directory: {model_dir}")
     print(f"[Human Composer] Target USDZ: {output_usdz}")
+    if output_anim_usdz:
+        print(f"[Human Composer] Animated USDZ: {output_anim_usdz}")
     if preview_img_path:
         print(f"[Human Composer] Static Preview: {preview_img_path}")
     if preview_vid_path:
@@ -222,6 +230,7 @@ def handle_bind(args):
             "lower": os.path.abspath(args.lower) if args.lower else None,
             "anim": os.path.abspath(args.anim) if args.anim else None,
             "output_usdz": output_usdz,
+            "output_anim_usdz": output_anim_usdz,
             "preview_image_path": preview_img_path,
             "preview_video_path": preview_vid_path,
             "intermediate_dir": intermediate_dir,
@@ -244,11 +253,17 @@ def handle_bind(args):
         print("[Human Composer] Running Blender binding process...")
         subprocess.run(cmd, check=True)
 
-        # Verify output archive
+        # Verify output archives
         valid, msg = verify_usdz_integrity(output_usdz)
         if not valid:
             print(f"[Error] Output verification failed: {msg}", file=sys.stderr)
             sys.exit(1)
+
+        if output_anim_usdz and os.path.exists(output_anim_usdz):
+            valid_anim, msg_anim = verify_usdz_integrity(output_anim_usdz)
+            if not valid_anim:
+                print(f"[Error] Animated output verification failed: {msg_anim}", file=sys.stderr)
+                sys.exit(1)
 
         # Generate comparison images if intermediate requested
         if is_intermediate and ref_data:
@@ -259,11 +274,13 @@ def handle_bind(args):
         print("  [Human Composer] Binding Pipeline Completed!")
         print("========================================================")
         print(f"  Model Output Directory: {model_dir}")
-        print(f"  -> Bound Model (USDZ) : {output_usdz}")
+        print(f"  -> Bound Model (USDZ)   : {output_usdz}")
+        if output_anim_usdz and os.path.exists(output_anim_usdz):
+            print(f"  -> Animated Model (USDZ): {output_anim_usdz}")
         if preview_img_path:
-            print(f"  -> Static Preview     : {preview_img_path}")
+            print(f"  -> Static Preview       : {preview_img_path}")
         if preview_vid_path:
-            print(f"  -> Animation (MP4)    : {preview_vid_path}")
+            print(f"  -> Animation (MP4)      : {preview_vid_path}")
         if is_intermediate:
             inter_items = os.listdir(intermediate_dir)
             print(f"  -> Intermediates ({len(inter_items)} files): {intermediate_dir}")

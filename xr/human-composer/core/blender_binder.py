@@ -243,12 +243,24 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
     target_waist_z = float(p_spine.z + 0.050 * leg_ratio)
     target_ankle_z = float((p_lfoot.z + p_rfoot.z) / 2.0 + 0.012)
 
-    # Detect lowest crotch vertex on body
-    crotch_search = bpts[(np.abs(bpts[:, 0]) < 0.025) & (bpts[:, 2] > p_lknee.z + 0.05) & (bpts[:, 2] < p_lupleg.z + 0.1)]
-    body_crotch_min_z = float(crotch_search[:, 2].min()) if len(crotch_search) > 0 else float((p_lupleg.z + p_rupleg.z) / 2.0 - 0.10)
+    ppts = np.array([v.co for v in lower_mesh.data.vertices])
+    p_z_min = float(ppts[:, 2].min())
+    p_z_max = float(ppts[:, 2].max())
 
-    # Trouser crotch target: 20mm below lowest body crotch vertex
-    target_crotch_z = float(body_crotch_min_z - 0.020)
+    p_center_pts = ppts[np.abs(ppts[:, 0]) < 0.018]
+    p_crotch_z = float(p_center_pts[:, 2].min()) if len(p_center_pts) > 0 else (p_z_min + 0.63 * (p_z_max - p_z_min))
+    raw_inseam_ratio = (p_crotch_z - p_z_min) / (p_z_max - p_z_min)
+
+    # Dynamic perineum and gluteal fold crotch target:
+    # Samples body mesh midline (|X| < 0.020) to find true anatomical perineum/gluteal fold vertex,
+    # then offsets by -1.5cm to guarantee 100% enclosure without drop-crotch webbing.
+    # Yields 0.571m on woman and 0.494m on man.
+    crotch_search = bpts[(np.abs(bpts[:, 0]) < 0.020) & (bpts[:, 2] > p_lfoot.z + 0.25) & (bpts[:, 2] < p_hips.z)]
+    if len(crotch_search) > 0:
+        body_crotch_min_z = float(crotch_search[:, 2].min())
+        target_crotch_z = float(body_crotch_min_z - 0.015)
+    else:
+        target_crotch_z = float(target_ankle_z + 0.6272 * (target_waist_z - target_ankle_z) * 0.98)
 
     # Body waist & hips cross sections
     waist_bpts = bpts[np.abs(bpts[:, 2] - target_waist_z) < 0.025]
@@ -257,7 +269,7 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
     body_waist_center_y = float((waist_bpts[:, 1].min() + waist_bpts[:, 1].max()) / 2.0) if len(waist_bpts) > 0 else 0.0
 
     # Regional pelvic scan across greater trochanters & glutes (accommodates curvier female and muscular male hips)
-    hips_zone_z_min = target_crotch_z + 0.30 * (p_hips.z - target_crotch_z)
+    hips_zone_z_min = target_crotch_z + 0.15 * (p_hips.z - target_crotch_z)
     hips_zone_z_max = p_hips.z + 0.030
     pelvis_slice_widths = []
     pelvis_slice_depths = []
@@ -269,18 +281,11 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
             pelvis_slice_depths.append(float(sl[:, 1].ptp()))
             pelvis_slice_cys.append(float((sl[:, 1].min() + sl[:, 1].max()) / 2.0))
 
-    body_hips_w = max(pelvis_slice_widths) if pelvis_slice_widths else 0.42
-    body_hips_d = max(pelvis_slice_depths) if pelvis_slice_depths else 0.32
-    body_hips_center_y = float(np.mean(pelvis_slice_cys)) if pelvis_slice_cys else 0.0
+    body_hips_w = max(pelvis_slice_widths) if pelvis_slice_widths else 0.40
+    body_hips_d = max(pelvis_slice_depths) if pelvis_slice_depths else 0.30
+    body_hips_center_y = float(np.mean(pelvis_slice_cys)) if pelvis_slice_cys else 0.0095
 
     # Pants raw geometry
-    ppts = np.array([v.co for v in lower_mesh.data.vertices])
-    p_z_min = float(ppts[:, 2].min())
-    p_z_max = float(ppts[:, 2].max())
-
-    p_center_pts = ppts[np.abs(ppts[:, 0]) < 0.018]
-    p_crotch_z = float(p_center_pts[:, 2].min()) if len(p_center_pts) > 0 else (p_z_min + 0.63 * (p_z_max - p_z_min))
-
     p_waist_pts = ppts[ppts[:, 2] > p_z_max - 0.05]
     p_waist_w = float(p_waist_pts[:, 0].ptp())
     p_waist_d = float(p_waist_pts[:, 1].ptp())
@@ -297,15 +302,16 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
     p_hips_pts = ppts[(ppts[:, 2] >= p_crotch_z + 0.20 * (p_z_max - p_crotch_z)) & (ppts[:, 2] <= p_crotch_z + 0.70 * (p_z_max - p_crotch_z))]
     p_hips_w = float(p_hips_pts[:, 0].ptp()) if len(p_hips_pts) > 0 else 0.94
     p_hips_d = float(p_hips_pts[:, 1].ptp()) if len(p_hips_pts) > 0 else 0.73
+    p_hips_center_y = float((p_hips_pts[:, 1].min() + p_hips_pts[:, 1].max()) / 2.0) if len(p_hips_pts) > 0 else 0.0095
 
     # Slim-fit tapered scaling:
-    # Waist attaches closely to body with 8% ease
-    waist_ease = 1.08
+    # Waist attaches closely to body with 10% ease
+    waist_ease = 1.10
     target_waist_scale_x = (body_waist_w / p_waist_w) * waist_ease
     target_waist_scale_y = (body_waist_d / p_waist_d) * waist_ease
 
-    # Hips fits comfortably with 10% ease
-    hips_ease = 1.10
+    # Hips fits comfortably with 16% ease
+    hips_ease = 1.16
     target_hips_scale_x = (body_hips_w / p_hips_w) * hips_ease
     target_hips_scale_y = (body_hips_d / p_hips_d) * hips_ease
 
@@ -341,19 +347,24 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
             if pelvis_u <= u_hips:
                 cur_scale_x = target_hips_scale_x
                 cur_scale_y = target_hips_scale_y
-                target_cy = body_hips_center_y
+                cur_target_cy = body_hips_center_y
+                cur_raw_cy = p_hips_center_y
             else:
                 t = (pelvis_u - u_hips) / (1.0 - u_hips)
                 blend = t ** 1.8
                 cur_scale_x = target_hips_scale_x + blend * (target_waist_scale_x - target_hips_scale_x)
                 cur_scale_y = target_hips_scale_y + blend * (target_waist_scale_y - target_hips_scale_y)
-                target_cy = body_hips_center_y + blend * (body_waist_center_y - body_hips_center_y)
+                cur_target_cy = body_hips_center_y + blend * (body_waist_center_y - body_hips_center_y)
+                cur_raw_cy = p_hips_center_y + blend * (p_waist_center_y - p_hips_center_y)
 
             # Anterior ease: subtle forward offset for fly/abdominal curvature
-            anterior_ease = -0.007 if ry < p_waist_center_y else 0.0
+            anterior_ease = -0.005 if ry < cur_raw_cy else 0.0
+            # Posterior lower gluteal ease: envelopes female gluteal curve near crotch
+            glute_factor = max(0.0, 1.0 - pelvis_u / u_hips) if pelvis_u < u_hips else 0.0
+            posterior_ease = 0.030 * (glute_factor ** 1.5) if ry > cur_raw_cy else 0.0
 
             vx = rx * cur_scale_x
-            vy = target_cy + (ry - p_waist_center_y) * cur_scale_y + anterior_ease
+            vy = cur_target_cy + (ry - cur_raw_cy) * cur_scale_y + anterior_ease + posterior_ease
         else:
             leg_u = (rz - p_z_min) / (p_crotch_z - p_z_min)
             is_left = (rx >= 0)
@@ -379,7 +390,7 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
             raw_center_y = -0.048
 
             scaled_center_x = raw_center_x * cur_leg_scale_x
-            scaled_center_y = body_hips_center_y + (raw_center_y - p_waist_center_y) * leg_scale_y
+            scaled_center_y = body_hips_center_y + (raw_center_y - p_hips_center_y) * leg_scale_y
 
             shift_x = bone_x - scaled_center_x
             shift_y = bone_y - scaled_center_y
@@ -393,23 +404,23 @@ def align_lower_garment(lower_mesh, body_mesh, armature):
             calf_factor = max(0.0, 1.0 - (calf_dist / 0.16)**2)
 
             vx_unscaled = rx * cur_leg_scale_x
-            vy_unscaled = body_hips_center_y + (ry - p_waist_center_y) * leg_scale_y
+            vy_unscaled = body_hips_center_y + (ry - p_hips_center_y) * leg_scale_y
 
             dx = vx_unscaled - scaled_center_x
             dy = vy_unscaled - scaled_center_y
 
             # Posterior and circumferential calf boost for gastrocnemius muscle clearance
-            calf_boost_y = 0.15 * calf_factor if dy > 0 else 0.0
-            calf_boost_x = 0.08 * calf_factor
+            calf_boost_y = 0.25 * calf_factor if dy > 0 else 0.0
+            calf_boost_x = 0.10 * calf_factor
 
-            rad_clearance_x = 1.04 + calf_boost_x
-            rad_clearance_y = 1.08 + calf_boost_y
+            rad_clearance_x = 1.05 + calf_boost_x
+            rad_clearance_y = 1.10 + calf_boost_y
 
             vx = scaled_center_x + shift_x * shift_weight + dx * rad_clearance_x
             vy = scaled_center_y + shift_y * shift_weight + dy * rad_clearance_y
 
-            # Sagittal medial clearance: guarantee legs stay strictly on their own anatomical sides
-            medial_clearance = 0.008 * (1.0 - leg_u)
+            # Sagittal medial clearance: guarantee legs stay strictly on their own anatomical sides below upper thighs
+            medial_clearance = max(0.0, 0.006 * (1.0 - leg_u / 0.7)) if leg_u < 0.7 else 0.0
             if is_left:
                 vx = max(vx, medial_clearance)
             else:
@@ -480,15 +491,18 @@ def bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty=None
     l_leg_vg = lower_mesh.vertex_groups.get("mixamorig_LeftLeg") or lower_mesh.vertex_groups.get("LeftLeg")
     r_leg_vg = lower_mesh.vertex_groups.get("mixamorig_RightLeg") or lower_mesh.vertex_groups.get("RightLeg")
 
-    # Detect crotch reference height for separating pelvis basin from independent leg tubes
-    l_upleg_b = armature.data.bones.get("mixamorig_LeftUpLeg") or armature.data.bones.get("LeftUpLeg")
-    r_upleg_b = armature.data.bones.get("mixamorig_RightUpLeg") or armature.data.bones.get("RightUpLeg")
-    if l_upleg_b and r_upleg_b:
-        p_lupleg = armature.matrix_world @ l_upleg_b.head_local
-        p_rupleg = armature.matrix_world @ r_upleg_b.head_local
-        crotch_ref_z = (p_lupleg.z + p_rupleg.z) / 2.0 - 0.08
+    # Dynamic perineum crotch reference height from body mesh (matches lower garment crotch target)
+    l_foot_b = armature.data.bones.get("mixamorig_LeftFoot") or armature.data.bones.get("LeftFoot")
+    hips_b = armature.data.bones.get("mixamorig_Hips") or armature.data.bones.get("Hips")
+    p_lfoot_z = float((armature.matrix_world @ l_foot_b.head_local).z) if l_foot_b else 0.10
+    p_hips_z = float((armature.matrix_world @ hips_b.head_local).z) if hips_b else 0.80
+
+    bpts = np.array([v.co for v in body_mesh.data.vertices])
+    crotch_search = bpts[(np.abs(bpts[:, 0]) < 0.020) & (bpts[:, 2] > p_lfoot_z + 0.25) & (bpts[:, 2] < p_hips_z)]
+    if len(crotch_search) > 0:
+        crotch_ref_z = float(crotch_search[:, 2].min())
     else:
-        crotch_ref_z = 0.50
+        crotch_ref_z = 0.58
 
     left_vg_map = {vg.index: vg for vg in left_leg_vgs}
     right_vg_map = {vg.index: vg for vg in right_leg_vgs}
@@ -499,66 +513,72 @@ def bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty=None
         vx = v.co.x
         vz = v.co.z
         v_groups = [(g.group, g.weight) for g in v.groups if g.weight > 0]
-        if vx > 0.005:
-            # Left leg side (+X): clear any right leg weights
+
+        # 1. Vertices below crotch seam (vz < crotch_ref_z - 0.02) are strictly on legs!
+        if vz < crotch_ref_z - 0.02:
+            is_left_side = (vx >= 0.0)
             for grp_idx, w in v_groups:
-                if grp_idx in right_vg_map:
-                    if vz < crotch_ref_z - 0.02:
-                        target_l_vg = l_leg_vg if "Leg" in right_vg_map[grp_idx].name or "Foot" in right_vg_map[grp_idx].name else l_upleg_vg
+                if is_left_side:
+                    # On left leg: reassign any right leg weights to left leg bone
+                    if grp_idx in right_vg_map:
+                        target_l_vg = l_leg_vg if ("Leg" in right_vg_map[grp_idx].name or "Foot" in right_vg_map[grp_idx].name) else l_upleg_vg
                         if target_l_vg:
                             target_l_vg.add([v.index], w, "ADD")
-                    else:
-                        if hips_vg:
-                            hips_vg.add([v.index], w, "ADD")
-                    right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
-                    cross_cleaned += 1
-
-            # Remove erroneous Hips weights on lower leg/shins/cuffs (vz < crotch_ref_z - 0.05)
-            if vz < crotch_ref_z - 0.05 and hips_vg:
-                for grp_idx, w in v_groups:
-                    if grp_idx == hips_vg.index:
+                        right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
+                    # Strip any Hips weight on leg vertices: reassign to left leg bone
+                    elif hips_vg and grp_idx == hips_vg.index:
                         target_l_vg = l_leg_vg if vz < (crotch_ref_z - 0.15) else l_upleg_vg
                         if target_l_vg:
                             target_l_vg.add([v.index], w, "ADD")
                         hips_vg.add([v.index], 0.0, "REPLACE")
                         lower_hips_cleaned += 1
-
-        elif vx < -0.005:
-            # Right leg side (-X): clear any left leg weights
-            for grp_idx, w in v_groups:
-                if grp_idx in left_vg_map:
-                    if vz < crotch_ref_z - 0.02:
-                        target_r_vg = r_leg_vg if "Leg" in left_vg_map[grp_idx].name or "Foot" in left_vg_map[grp_idx].name else r_upleg_vg
+                else:
+                    # On right leg: reassign any left leg weights to right leg bone
+                    if grp_idx in left_vg_map:
+                        target_r_vg = r_leg_vg if ("Leg" in left_vg_map[grp_idx].name or "Foot" in left_vg_map[grp_idx].name) else r_upleg_vg
                         if target_r_vg:
                             target_r_vg.add([v.index], w, "ADD")
-                    else:
-                        if hips_vg:
-                            hips_vg.add([v.index], w, "ADD")
-                    left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
-                    cross_cleaned += 1
-
-            # Remove erroneous Hips weights on lower leg/shins/cuffs (vz < crotch_ref_z - 0.05)
-            if vz < crotch_ref_z - 0.05 and hips_vg:
-                for grp_idx, w in v_groups:
-                    if grp_idx == hips_vg.index:
+                        left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
+                    # Strip any Hips weight on leg vertices: reassign to right leg bone
+                    elif hips_vg and grp_idx == hips_vg.index:
                         target_r_vg = r_leg_vg if vz < (crotch_ref_z - 0.15) else r_upleg_vg
                         if target_r_vg:
                             target_r_vg.add([v.index], w, "ADD")
                         hips_vg.add([v.index], 0.0, "REPLACE")
                         lower_hips_cleaned += 1
         else:
-            # Center crotch apex (|X| <= 5mm): assign to hips and clear both leg weights
-            for grp_idx, w in v_groups:
-                if grp_idx in left_vg_map:
-                    if hips_vg:
-                        hips_vg.add([v.index], w, "ADD")
-                    left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
-                    cross_cleaned += 1
-                elif grp_idx in right_vg_map:
-                    if hips_vg:
-                        hips_vg.add([v.index], w, "ADD")
-                    right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
-                    cross_cleaned += 1
+            # 2. Vertices at or above crotch seam (pelvic basin / waistband)
+            if abs(vx) <= 0.005:
+                # Center crotch apex (|X| <= 5mm): assign to hips and clear both leg weights
+                for grp_idx, w in v_groups:
+                    if grp_idx in left_vg_map:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                        left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
+                    elif grp_idx in right_vg_map:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                        right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
+            elif vx > 0.005:
+                # Left pelvis: clear opposite right leg weights
+                for grp_idx, w in v_groups:
+                    if grp_idx in right_vg_map:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                        right_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
+            else:
+                # Right pelvis: clear opposite left leg weights
+                for grp_idx, w in v_groups:
+                    if grp_idx in left_vg_map:
+                        if hips_vg:
+                            hips_vg.add([v.index], w, "ADD")
+                        left_vg_map[grp_idx].add([v.index], 0.0, "REPLACE")
+                        cross_cleaned += 1
 
     print(f"[Blender Binder] Sanitized {cross_cleaned} cross-limb and {lower_hips_cleaned} lower-leg hips vertex group assignments.")
 
@@ -616,6 +636,7 @@ def main():
     upper_usdz = config.get("upper")
     lower_usdz = config.get("lower")
     output_usdz = config["output_usdz"]
+    output_anim_usdz = config.get("output_anim_usdz")
     preview_image_path = config.get("preview_image_path")
     preview_video_path = config.get("preview_video_path")
     intermediate_dir = config.get("intermediate_dir")
@@ -699,9 +720,9 @@ def main():
         elif bpy.data.actions:
             first_skeleton_action = bpy.data.actions[0]
 
-        # Load optional external animation file if provided (only needed if rendering preview animation)
+        # Load optional external animation file if provided
         anim_file = config.get("anim")
-        if preview_video_path and anim_file and os.path.exists(anim_file):
+        if anim_file and os.path.exists(anim_file):
             print(f"[Blender Binder] Loading external animation from: {anim_file}")
             pre_anim_objs = set(bpy.context.scene.objects)
             bpy.ops.wm.usd_import(filepath=anim_file)
@@ -958,6 +979,34 @@ def main():
             selected_objects_only=False
         )
         print("[Blender Binder] USDZ export complete.")
+
+        # 8b. Export Animated USDZ (Option A: Separate file when animation is provided)
+        if output_anim_usdz and first_skeleton_action:
+            print(f"[Blender Binder] Exporting animated USDZ to {output_anim_usdz}...")
+            os.makedirs(os.path.dirname(os.path.abspath(output_anim_usdz)), exist_ok=True)
+
+            armature.animation_data_create()
+            armature.animation_data.action = first_skeleton_action
+
+            act_start = int(first_skeleton_action.frame_range[0])
+            act_end = int(first_skeleton_action.frame_range[1])
+            bpy.context.scene.frame_start = act_start
+            bpy.context.scene.frame_end = act_end
+
+            bpy.ops.wm.usd_export(
+                filepath=output_anim_usdz,
+                export_armatures=True,
+                export_animation=True,
+                export_textures=True,
+                export_materials=True,
+                generate_preview_surface=True,
+                relative_paths=True,
+                selected_objects_only=False
+            )
+            print(f"[Blender Binder] Animated USDZ export complete ({act_start}-{act_end} frames).")
+
+            # Restore armature to T-pose before rendering static preview images
+            armature.animation_data.action = None
 
         # Setup Camera & Lighting for Previews (only if rendering is needed)
         needs_render = bool(preview_image_path or (render_intermediate and intermediate_dir) or preview_video_path)
