@@ -90,6 +90,7 @@
                     <div class="ref-tag-row">
                       <span class="badge-role style-role">Style Reference</span>
                       <span class="badge-always">Always Active</span>
+                      <span v-if="styleRef.is_scene_override" class="badge-override" title="This reference applies specifically to this scene">Scene Override</span>
                     </div>
                     <h5 class="ref-name">{{ styleRef.style_name || styleRef.name }}</h5>
                     <p class="ref-desc">Guides artistic medium, textures, palette & lighting.</p>
@@ -103,6 +104,17 @@
                       >
                         <span class="material-symbols-rounded">photo_library</span>
                         <span>Change</span>
+                      </button>
+                      <button
+                        v-if="styleRef.is_scene_override"
+                        type="button"
+                        class="clean-btn clean-btn-xs reset-ref-btn"
+                        :disabled="isUploadingRef || isSelectingRef"
+                        title="Reset style reference override for this scene back to workspace default"
+                        @click="onResetRef('style')"
+                      >
+                        <span class="material-symbols-rounded">restart_alt</span>
+                        <span>Reset</span>
                       </button>
                       <button
                         v-if="styleRef.assetUrl"
@@ -130,8 +142,11 @@
                     </div>
                     <div class="ref-info">
                       <div class="ref-tag-row">
-                        <span class="badge-role char-role">Character Reference</span>
+                        <span class="badge-role" :class="`role-${c.category || 'hero'}`">
+                          {{ c.category === 'boss' ? 'Boss Titan' : (c.category === 'enemy' ? 'Enemy / Monster' : 'Character Reference') }}
+                        </span>
                         <span class="badge-matched">Matched</span>
+                        <span v-if="c.is_scene_override" class="badge-override" title="This reference photo applies specifically to this scene">Scene Override</span>
                       </div>
                       <h5 class="ref-name">{{ c.name }}</h5>
                       <p class="ref-desc">Preserves visual identity, features & costume.</p>
@@ -145,6 +160,17 @@
                         >
                           <span class="material-symbols-rounded">photo_library</span>
                           <span>Change</span>
+                        </button>
+                        <button
+                          v-if="c.is_scene_override"
+                          type="button"
+                          class="clean-btn clean-btn-xs reset-ref-btn"
+                          :disabled="isUploadingRef || isSelectingRef"
+                          title="Reset reference photo for this scene back to default"
+                          @click="onResetRef('character', c.name)"
+                        >
+                          <span class="material-symbols-rounded">restart_alt</span>
+                          <span>Reset</span>
                         </button>
                         <button
                           v-if="c.assetUrl"
@@ -485,6 +511,32 @@
             </button>
           </div>
 
+          <!-- Application Scope Selector -->
+          <div class="picker-scope-card">
+            <div class="picker-scope-label">
+              <span class="material-symbols-rounded scope-icon">tune</span>
+              <span>Apply Selection Scope:</span>
+            </div>
+            <div class="picker-scope-options">
+              <label class="scope-radio-label" :class="{ selected: pickerScope === 'scene' }">
+                <input type="radio" v-model="pickerScope" value="scene" />
+                <span class="scope-radio-custom"></span>
+                <span class="scope-text">
+                  <strong>This Scene Only</strong>
+                  <span class="scope-hint">Isolated override for {{ tagId || 'current scene' }}</span>
+                </span>
+              </label>
+              <label class="scope-radio-label" :class="{ selected: pickerScope === 'global' }">
+                <input type="radio" v-model="pickerScope" value="global" />
+                <span class="scope-radio-custom"></span>
+                <span class="scope-text">
+                  <strong>All Scenes</strong>
+                  <span class="scope-hint">Update workspace default</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
           <!-- Filter Tabs & Tools -->
           <div class="picker-toolbar">
             <div v-if="pickerType === 'character'" class="picker-tabs">
@@ -586,6 +638,7 @@ import {
   uploadReferenceImage,
   deleteReferenceImage,
   selectReferenceImage,
+  resetReferenceImage,
   getWorkspace,
   isTagGenerating,
   getGenerationStatus,
@@ -629,6 +682,7 @@ const localStatusMsg = ref('');
 const showAssetPicker = ref(false);
 const pickerType = ref('style'); // 'style' | 'character'
 const pickerTargetName = ref('');
+const pickerScope = ref('scene'); // 'scene' | 'global'
 const pickerTab = ref('current'); // for character: 'current' | 'all'
 const pickerSearch = ref('');
 const isSelectingRef = ref(false);
@@ -749,6 +803,7 @@ async function openAssetPicker(type, targetName = '') {
   pickerTargetName.value = targetName;
   pickerSearch.value = '';
   pickerTab.value = 'current';
+  pickerScope.value = 'scene';
   showAssetPicker.value = true;
 
   const currentStem = activeStem.value;
@@ -778,29 +833,37 @@ async function onSelectAsset(item) {
       type: pickerType.value,
       characterName: pickerTargetName.value,
       assetPath: item.path,
-      filename: item.filename
+      filename: item.filename,
+      tagId: tagId.value,
+      scope: pickerScope.value
     });
+
+    const isScene = pickerScope.value === 'scene';
+    const scopeLabel = isScene ? `Scene ${tagId.value || 'Override'}` : 'Global Default';
 
     if (pickerType.value === 'style') {
       if (styleRef.value) {
         styleRef.value.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
         styleRef.value.name = res.filename;
+        styleRef.value.is_scene_override = isScene;
       } else {
         styleRef.value = {
           name: res.filename,
           assetUrl: `${res.assetUrl}?t=${Date.now()}`,
           style_name: res.filename,
+          is_scene_override: isScene,
           role: 'Style Reference (Always Active)'
         };
       }
-      localStatusMsg.value = `✨ Style reference updated to '${res.filename}'! Click 'Regenerate Scene' to re-render.`;
+      localStatusMsg.value = `✨ Style reference updated to '${res.filename}' (${scopeLabel})! Click 'Regenerate Scene' to re-render.`;
     } else if (pickerType.value === 'character') {
       const targetChar = (characterRefs.value || []).find(c => c.name === pickerTargetName.value);
       if (targetChar) {
         targetChar.image = res.filename;
         targetChar.assetUrl = `${res.assetUrl}?t=${Date.now()}`;
+        targetChar.is_scene_override = isScene;
       }
-      localStatusMsg.value = `✨ Reference photo for '${pickerTargetName.value}' updated to '${res.filename}'! Click 'Regenerate Scene' to re-render.`;
+      localStatusMsg.value = `✨ Reference photo for '${pickerTargetName.value}' updated to '${res.filename}' (${scopeLabel})! Click 'Regenerate Scene' to re-render.`;
     }
 
     emit('refresh');
@@ -808,6 +871,41 @@ async function onSelectAsset(item) {
   } catch (err) {
     localStatusMsg.value = `❌ Failed to select reference: ${err.message}`;
     alert(`Failed to set reference asset: ${err.message}`);
+  } finally {
+    isSelectingRef.value = false;
+  }
+}
+
+async function onResetRef(type, targetName = '') {
+  const currentStem = activeStem.value;
+  if (!currentStem || isSelectingRef.value) return;
+
+  isSelectingRef.value = true;
+  localStatusMsg.value = `Resetting reference override for ${targetName || 'style'} on scene ${tagId.value}...`;
+
+  try {
+    await resetReferenceImage(currentStem, {
+      type,
+      characterName: targetName,
+      tagId: tagId.value
+    });
+
+    if (type === 'style') {
+      if (styleRef.value) {
+        styleRef.value.is_scene_override = false;
+      }
+    } else if (type === 'character') {
+      const targetChar = (characterRefs.value || []).find(c => c.name === targetName);
+      if (targetChar) {
+        targetChar.is_scene_override = false;
+      }
+    }
+
+    localStatusMsg.value = `✨ Reset reference override for ${targetName || 'style'} on scene ${tagId.value}!`;
+    emit('refresh');
+  } catch (err) {
+    localStatusMsg.value = `❌ Failed to reset reference override: ${err.message}`;
+    alert(`Failed to reset reference override: ${err.message}`);
   } finally {
     isSelectingRef.value = false;
   }
@@ -2041,9 +2139,20 @@ defineExpose({
   color: #0284c7;
 }
 
-.char-role {
+.char-role,
+.role-hero {
   background: rgba(168, 85, 247, 0.12);
   color: #9333ea;
+}
+
+.role-boss {
+  background: rgba(225, 29, 72, 0.12);
+  color: #e11d48;
+}
+
+.role-enemy {
+  background: rgba(234, 88, 12, 0.12);
+  color: #ea580c;
 }
 
 .generic-role {
@@ -2065,6 +2174,16 @@ defineExpose({
   font-weight: 600;
   color: #7c3aed;
   background: rgba(124, 58, 237, 0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.badge-override {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.12);
+  border: 1px solid rgba(217, 119, 6, 0.25);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
 }
@@ -2093,8 +2212,9 @@ defineExpose({
   margin-top: 0.4rem;
 }
 
-/* Ensure Change and Delete buttons are the exact same size */
+/* Ensure Change, Reset, and Delete buttons are the exact same size */
 .ref-upload-row .change-ref-btn,
+.ref-upload-row .reset-ref-btn,
 .ref-upload-row .delete-ref-btn {
   display: inline-flex;
   align-items: center;
@@ -2118,6 +2238,7 @@ defineExpose({
 }
 
 .ref-upload-row .change-ref-btn .material-symbols-rounded,
+.ref-upload-row .reset-ref-btn .material-symbols-rounded,
 .ref-upload-row .delete-ref-btn .material-symbols-rounded {
   font-size: 15px;
   line-height: 1;
@@ -2138,6 +2259,18 @@ defineExpose({
   color: var(--accent-primary);
 }
 
+.ref-upload-row .reset-ref-btn {
+  color: #d97706;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.ref-upload-row .reset-ref-btn:hover:not(:disabled) {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #b45309;
+}
+
 .ref-upload-row .delete-ref-btn {
   color: #ef4444;
   border-color: #fca5a5;
@@ -2151,9 +2284,85 @@ defineExpose({
 }
 
 .ref-upload-row .change-ref-btn:disabled,
+.ref-upload-row .reset-ref-btn:disabled,
 .ref-upload-row .delete-ref-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Asset Picker Scope Selector */
+.picker-scope-card {
+  padding: 0.75rem 1.25rem;
+  background: var(--bg-surface-secondary);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.picker-scope-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.picker-scope-label .scope-icon {
+  font-size: 17px;
+  color: var(--accent-primary);
+}
+
+.picker-scope-options {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.scope-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.scope-radio-label:hover {
+  border-color: var(--border-strong);
+}
+
+.scope-radio-label.selected {
+  border-color: var(--accent-primary);
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.scope-radio-label input[type="radio"] {
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.scope-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.scope-text strong {
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.scope-hint {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
 }
 
 /* Asset Picker Modal Styles */

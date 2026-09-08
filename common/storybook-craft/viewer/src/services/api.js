@@ -139,7 +139,7 @@ export async function deleteReferenceImage(stem, { type, characterName, filename
   return await res.json();
 }
 
-export async function selectReferenceImage(stem, { type, characterName, assetPath, filename }) {
+export async function selectReferenceImage(stem, { type, characterName, assetPath, filename, tagId, scope, action }) {
   const res = await fetch(`/api/workspace/${encodeURIComponent(stem)}/select-ref`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -147,12 +147,37 @@ export async function selectReferenceImage(stem, { type, characterName, assetPat
       type,
       character_name: characterName,
       asset_path: assetPath,
-      filename
+      filename,
+      tag_id: tagId,
+      scope,
+      action
     })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Failed to select reference asset: ${res.statusText}`);
+  }
+  return await res.json();
+}
+
+export async function resetReferenceImage(stem, { type, characterName, tagId }) {
+  return selectReferenceImage(stem, {
+    type,
+    characterName,
+    tagId,
+    action: 'reset'
+  });
+}
+
+export async function extractCharacters(stem, options = {}) {
+  const res = await fetch(`/api/workspace/${encodeURIComponent(stem)}/extract-characters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to extract characters: ${res.statusText}`);
   }
   return await res.json();
 }

@@ -52,6 +52,7 @@ try:
         update_media_tag_prompts,
         extract_media_tags,
         extract_tag_context,
+        extract_characters_from_story,
         StoryWorkspace
     )
 except Exception:
@@ -62,6 +63,7 @@ except Exception:
     update_media_tag_prompts = None
     extract_media_tags = None
     extract_tag_context = None
+    extract_characters_from_story = None
     StoryWorkspace = None
 
 
@@ -230,6 +232,13 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             sub = pathname[len("/api/workspace/"):]
             stem = sub[:sub.index(select_ref_marker)]
             self.handle_api_select_ref(stem)
+            return
+
+        extract_chars_marker = "/extract-characters"
+        if extract_chars_marker in pathname and pathname.startswith("/api/workspace/"):
+            sub = pathname[len("/api/workspace/"):]
+            stem = sub[:sub.index(extract_chars_marker)]
+            self.handle_api_extract_characters(stem)
             return
 
         generate_marker = "/generate"
@@ -662,6 +671,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             raw_tags.sort(key=lambda x: x.get("_pos", 0))
 
             all_generated = generated_images + generated_videos
+            ws_settings = self.load_workspace_settings(stem)
+            scenes_cfg = ws_settings.get("scenes", {})
             tags = []
             for rt in raw_tags:
                 tag_id = rt.get("id", "")
@@ -682,6 +693,10 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 rt_clean["isGenerated"] = matched is not None
                 rt_clean["matchedAsset"] = matched
 
+                scene_cfg = scenes_cfg.get(tag_id, {})
+                scene_char_refs = scene_cfg.get("character_refs", {})
+                scene_style_ref = scene_cfg.get("style_ref")
+
                 # Match character references
                 matched_chars = []
                 if match_characters_for_tag:
@@ -697,35 +712,52 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     cname = ch.get("name", "")
                     imgs = ch.get("images", [])
                     c_img = imgs[0] if imgs else None
+                    is_char_override = False
+                    if cname in scene_char_refs:
+                        override_val = scene_char_refs[cname]
+                        if (ws_dir / "char-ref" / cname / override_val).is_file():
+                            c_img = override_val
+                            is_char_override = True
+
                     char_refs_data.append({
                         "name": cname,
+                        "category": ch.get("category", "hero"),
                         "role": ch.get("role", "Character"),
                         "visual_dna": ch.get("visual_dna", ""),
                         "image": c_img,
                         "assetUrl": f"/api/asset/{stem}/char-ref/{cname}/{c_img}" if c_img else None,
+                        "is_scene_override": is_char_override,
                         "role_guide": f"Character Identity Reference: {cname} (Context Matched)"
                     })
 
-                # Style Reference
+                # Style Reference (check per-scene override)
                 style_imgs = style.get("images", [])
                 style_img = style_imgs[0] if style_imgs else None
+                is_style_override = False
+                if scene_style_ref and (ws_dir / "style-ref" / scene_style_ref).is_file():
+                    style_img = scene_style_ref
+                    is_style_override = True
+
                 style_ref_data = {
                     "name": style_img,
                     "assetUrl": f"/api/asset/{stem}/style-ref/{style_img}" if style_img else None,
                     "style_name": style.get("style_name", "Art Style"),
                     "style_prompt": style.get("style_prompt", ""),
+                    "is_scene_override": is_style_override,
                     "role": "Style Reference (Always Active)"
                 } if style_img else None
 
                 # Composed prompt with strict anti-modification template
                 composed_prompt = ""
+                extra_p = scene_cfg.get("extra_prompt")
                 if compose_reference_prompt:
                     composed_prompt = compose_reference_prompt(
                         context_prompt=rt_clean["prompt"],
                         style_prompt=style.get("style_prompt", ""),
                         has_style_image=style_img is not None,
                         character_refs=char_refs_data,
-                        tag_type=tag_type
+                        tag_type=tag_type,
+                        extra_prompt=extra_p
                     )
                 else:
                     composed_prompt = rt_clean["prompt"]
@@ -1050,11 +1082,38 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             ref_type = payload.get("type", "style")  # "style" or "character"
             char_name = payload.get("character_name", "").strip()
             asset_path = payload.get("asset_path", "").strip()
-            filename = payload.get("filename", "").strip()
+            filename = (payload.get("filename") or payload.get("image_name") or "").strip()
+            tag_id = payload.get("tag_id", "").strip()
+            scope = payload.get("scope", "scene" if tag_id else "global")
+            action = payload.get("action", "select")
 
             ws_dir = self.outputs_dir / stem
             if not ws_dir.exists():
                 self.send_json_response({"error": f"Workspace '{stem}' not found"}, status=404)
+                return
+
+            # Handle reset action (reverts a scene override back to workspace default)
+            if action == "reset":
+                if not tag_id:
+                    self.send_json_response({"error": "tag_id is required to reset reference override"}, status=400)
+                    return
+                current_settings = self.load_workspace_settings(stem)
+                if "scenes" in current_settings and tag_id in current_settings["scenes"]:
+                    scene_entry = current_settings["scenes"][tag_id]
+                    if ref_type == "character":
+                        if "character_refs" in scene_entry:
+                            scene_entry["character_refs"].pop(char_name, None)
+                    elif ref_type == "style":
+                        scene_entry.pop("style_ref", None)
+                    self.save_workspace_settings(stem, current_settings)
+                self.send_json_response({
+                    "success": True,
+                    "action": "reset",
+                    "tag_id": tag_id,
+                    "character_name": char_name,
+                    "type": ref_type,
+                    "message": f"Successfully reset reference override for {char_name or 'style'} on scene {tag_id}"
+                })
                 return
 
             # Clean asset_path if it's a URL
@@ -1091,7 +1150,25 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if src_file.resolve() != dst_file.resolve():
                     shutil.copy2(src_file, dst_file)
 
-                # Update style.json
+                # Scope: Scene only vs Global
+                if scope == "scene" and tag_id:
+                    current_settings = self.load_workspace_settings(stem)
+                    current_settings.setdefault("scenes", {}).setdefault(tag_id, {})["style_ref"] = final_filename
+                    self.save_workspace_settings(stem, current_settings)
+                    asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
+                    self.send_json_response({
+                        "success": True,
+                        "message": f"Successfully selected '{final_filename}' as style reference for scene '{tag_id}'",
+                        "filename": final_filename,
+                        "assetUrl": asset_url,
+                        "type": "style",
+                        "tag_id": tag_id,
+                        "scope": "scene",
+                        "is_scene_override": True
+                    })
+                    return
+
+                # Global update to style.json
                 s_json_file = style_dir / "style.json"
                 s_data = {}
                 if s_json_file.exists():
@@ -1109,13 +1186,22 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 with open(s_json_file, "w", encoding="utf-8") as f:
                     json.dump(s_data, f, ensure_ascii=False, indent=2)
 
+                # If tag_id had a scene override, clean it up so it follows the new global default
+                if tag_id:
+                    current_settings = self.load_workspace_settings(stem)
+                    if "scenes" in current_settings and tag_id in current_settings["scenes"]:
+                        current_settings["scenes"][tag_id].pop("style_ref", None)
+                        self.save_workspace_settings(stem, current_settings)
+
                 asset_url = f"/api/asset/{stem}/style-ref/{final_filename}"
                 self.send_json_response({
                     "success": True,
-                    "message": f"Successfully selected '{final_filename}' as style reference",
+                    "message": f"Successfully selected '{final_filename}' as global style reference",
                     "filename": final_filename,
                     "assetUrl": asset_url,
-                    "type": "style"
+                    "type": "style",
+                    "scope": "global",
+                    "is_scene_override": False
                 })
 
             elif ref_type == "character":
@@ -1128,7 +1214,6 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 final_filename = filename
 
                 # 1. Check if the file is ALREADY inside this specific character's directory!
-                # (E.g. selecting ref_002.jpeg when switching from ref_001.png)
                 src_file = None
                 if final_filename and (char_dir / final_filename).is_file():
                     src_file = char_dir / final_filename
@@ -1138,13 +1223,12 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     if cand.exists() and cand.is_file():
                         # Protect against cross-character file copying collisions
                         if "char-ref" in str(cand) and char_name not in str(cand):
-                            # Sibling character reference file: do NOT overwrite ref_001/ref_002 blindly
                             final_filename = f"{cand.parent.name}_{cand.name}"
                         src_file = cand
                         final_filename = final_filename or src_file.name
 
                 if not src_file and final_filename:
-                    # Fallback check images folder ONLY (never rglob across all character folders!)
+                    # Fallback check images folder ONLY
                     if (ws_dir / "images" / final_filename).is_file():
                         src_file = ws_dir / "images" / final_filename
 
@@ -1157,7 +1241,26 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if src_file.resolve() != dst_file.resolve():
                     shutil.copy2(src_file, dst_file)
 
-                # Update character.json preserving existing metadata
+                # Scope: Scene only vs Global
+                if scope == "scene" and tag_id:
+                    current_settings = self.load_workspace_settings(stem)
+                    current_settings.setdefault("scenes", {}).setdefault(tag_id, {}).setdefault("character_refs", {})[char_name] = final_filename
+                    self.save_workspace_settings(stem, current_settings)
+                    asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
+                    self.send_json_response({
+                        "success": True,
+                        "message": f"Successfully set '{final_filename}' as reference photo for '{char_name}' on scene '{tag_id}'",
+                        "filename": final_filename,
+                        "assetUrl": asset_url,
+                        "type": "character",
+                        "character_name": char_name,
+                        "tag_id": tag_id,
+                        "scope": "scene",
+                        "is_scene_override": True
+                    })
+                    return
+
+                # Global update: Update character.json preserving existing metadata
                 c_json_file = char_dir / "character.json"
                 c_data = {}
                 if c_json_file.exists():
@@ -1169,6 +1272,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if not c_data:
                     c_data = {
                         "name": char_name,
+                        "category": "hero",
                         "role": "Character",
                         "visual_dna": f"Character {char_name}",
                         "portrait_prompt": f"Portrait of {char_name}",
@@ -1178,7 +1282,6 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 if final_filename in imgs:
                     imgs.remove(final_filename)
                 imgs.insert(0, final_filename)
-                # Ensure all other disk images in char_dir are in the list
                 for f in sorted(char_dir.iterdir()):
                     if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                         if f.name not in imgs:
@@ -1213,6 +1316,8 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                             c["visual_dna"] = c_data.get("visual_dna")
                         if not c.get("portrait_prompt") and c_data.get("portrait_prompt"):
                             c["portrait_prompt"] = c_data.get("portrait_prompt")
+                        if "category" in c_data:
+                            c["category"] = c_data["category"]
 
                 if not found_in_meta:
                     chars_meta.setdefault("characters", []).append(c_data)
@@ -1220,17 +1325,145 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                 with open(all_chars_file, "w", encoding="utf-8") as f:
                     json.dump(chars_meta, f, ensure_ascii=False, indent=2)
 
+                # Clear scene override if any for this tag so it uses the new global default
+                if tag_id:
+                    current_settings = self.load_workspace_settings(stem)
+                    if "scenes" in current_settings and tag_id in current_settings["scenes"]:
+                        if "character_refs" in current_settings["scenes"][tag_id]:
+                            current_settings["scenes"][tag_id]["character_refs"].pop(char_name, None)
+                            self.save_workspace_settings(stem, current_settings)
+
                 asset_url = f"/api/asset/{stem}/char-ref/{char_name}/{final_filename}"
                 self.send_json_response({
                     "success": True,
-                    "message": f"Successfully selected '{final_filename}' as reference photo for '{char_name}'",
+                    "message": f"Successfully selected '{final_filename}' as global reference photo for '{char_name}'",
                     "filename": final_filename,
                     "assetUrl": asset_url,
                     "type": "character",
-                    "character_name": char_name
+                    "character_name": char_name,
+                    "scope": "global",
+                    "is_scene_override": False
                 })
             else:
                 self.send_json_response({"error": f"Unknown reference type '{ref_type}'"}, status=400)
+
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
+
+    def handle_api_extract_characters(self, stem: str):
+        try:
+            ws_dir = self.outputs_dir / stem
+            if not ws_dir.exists():
+                self.send_json_response({"error": f"Workspace '{stem}' not found"}, status=404)
+                return
+
+            md_files = [f for f in ws_dir.glob("*.md") if not f.name.startswith(".")]
+            if not md_files:
+                self.send_json_response({"error": f"No markdown file found in workspace '{stem}'"}, status=404)
+                return
+
+            output_md = ws_dir / f"{stem}-output.md"
+            if not output_md.exists():
+                output_md = md_files[0]
+
+            with open(output_md, "r", encoding="utf-8") as f:
+                md_text = f.read()
+
+            api_key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+            if not extract_characters_from_story:
+                self.send_json_response({"error": "Character extraction engine not available"}, status=500)
+                return
+
+            extracted = extract_characters_from_story(md_text, api_key=api_key)
+            char_dir = ws_dir / "char-ref"
+            char_dir.mkdir(parents=True, exist_ok=True)
+
+            chars_json_file = char_dir / "characters.json"
+            existing_chars = []
+            if chars_json_file.exists():
+                try:
+                    with open(chars_json_file, "r", encoding="utf-8") as f:
+                        existing_chars = json.load(f).get("characters", [])
+                except Exception:
+                    pass
+
+            # Map existing chars by normalized name
+            def normalize_cname(n: str) -> str:
+                return re.sub(r'[\(（].*?[\)）]', '', n or "").strip(' "“\'')
+
+            existing_by_norm = {}
+            for c in existing_chars:
+                if "name" in c:
+                    norm = normalize_cname(c["name"])
+                    if norm:
+                        existing_by_norm[norm] = c
+
+            result_chars = []
+            processed_norms = set()
+
+            for item in extracted:
+                cname = normalize_cname(item.get("name", ""))
+                if not cname or cname in processed_norms:
+                    continue
+                processed_norms.add(cname)
+
+                cdir = char_dir / cname
+                cdir.mkdir(parents=True, exist_ok=True)
+                c_json_file = cdir / "character.json"
+
+                c_info = {}
+                if c_json_file.exists():
+                    try:
+                        with open(c_json_file, "r", encoding="utf-8") as f:
+                            c_info = json.load(f)
+                    except Exception:
+                        pass
+                if not c_info and cname in existing_by_norm:
+                    c_info = existing_by_norm[cname]
+
+                disk_imgs = []
+                for f in sorted(cdir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                        disk_imgs.append(f.name)
+
+                merged_imgs = list(c_info.get("images", []))
+                for di in disk_imgs:
+                    if di not in merged_imgs:
+                        merged_imgs.append(di)
+
+                c_data = {
+                    "name": cname,
+                    "category": item.get("category", c_info.get("category", "hero")),
+                    "role": item.get("role", c_info.get("role", "Character")),
+                    "visual_dna": item.get("visual_dna", c_info.get("visual_dna", "")),
+                    "portrait_prompt": item.get("portrait_prompt", c_info.get("portrait_prompt", "")),
+                    "images": merged_imgs if merged_imgs else disk_imgs,
+                    "source": c_info.get("source", "auto_extracted")
+                }
+
+                with open(c_json_file, "w", encoding="utf-8") as f:
+                    json.dump(c_data, f, ensure_ascii=False, indent=2)
+
+                result_chars.append(c_data)
+
+            # Preserve any existing characters that were not in extracted list
+            final_chars_list = list(result_chars)
+            for norm, c in existing_by_norm.items():
+                if norm not in processed_norms:
+                    c["name"] = normalize_cname(c["name"])
+                    final_chars_list.append(c)
+
+            with open(chars_json_file, "w", encoding="utf-8") as f:
+                json.dump({"characters": final_chars_list}, f, ensure_ascii=False, indent=2)
+
+            self.send_json_response({
+                "success": True,
+                "message": f"Successfully extracted {len(result_chars)} character(s) and creature(s)",
+                "extracted_count": len(result_chars),
+                "characters": final_chars_list
+            })
+        except Exception as e:
+            self.send_json_response({"error": str(e)}, status=500)
 
         except Exception as e:
             self.send_json_response({"error": str(e)}, status=500)
@@ -1330,10 +1563,13 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
             "characters": []
         }
 
-        # Style reference
+        # Style reference (check scene override first)
         style_dir = ws_dir / "style-ref"
         style_img_file = None
-        if style_dir.exists():
+        scene_style_ref = scene_override.get("style_ref")
+        if scene_style_ref and (style_dir / scene_style_ref).is_file():
+            style_img_file = style_dir / scene_style_ref
+        elif style_dir.exists():
             s_json_file = style_dir / "style.json"
             s_imgs = []
             if s_json_file.exists():
@@ -1384,6 +1620,7 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                             pass
                     all_chars.append({
                         "name": cd.name,
+                        "category": c_info.get("category", "hero"),
                         "role": c_info.get("role", "Character"),
                         "visual_dna": c_info.get("visual_dna", ""),
                         "portrait_prompt": c_info.get("portrait_prompt", ""),
@@ -1407,29 +1644,36 @@ class StorybookViewerHandler(SimpleHTTPRequestHandler):
                     if cname and (cname in matching_tag.get("prompt", "") or cname in matching_tag.get("context_hint", "")):
                         matched_characters.append(ch)
 
+        scene_char_refs = scene_override.get("character_refs", {})
         for ch in matched_characters:
             cname = ch.get("name", "")
             cd = char_dir / cname
             c_img_file = None
-            c_json_path = cd / "character.json"
-            preferred_c_imgs = []
-            if c_json_path.exists():
-                try:
-                    with open(c_json_path, "r", encoding="utf-8") as cjf:
-                        preferred_c_imgs = json.load(cjf).get("images", [])
-                except Exception:
-                    pass
-            if not preferred_c_imgs:
-                preferred_c_imgs = ch.get("images", [])
-            for c_cand in preferred_c_imgs:
-                if (cd / c_cand).is_file():
-                    c_img_file = cd / c_cand
-                    break
-            if not c_img_file and cd.exists():
-                for f in sorted(cd.iterdir()):
-                    if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-                        c_img_file = f
+
+            # 1. Check scene override first!
+            scene_c_img = scene_char_refs.get(cname)
+            if scene_c_img and (cd / scene_c_img).is_file():
+                c_img_file = cd / scene_c_img
+            else:
+                c_json_path = cd / "character.json"
+                preferred_c_imgs = []
+                if c_json_path.exists():
+                    try:
+                        with open(c_json_path, "r", encoding="utf-8") as cjf:
+                            preferred_c_imgs = json.load(cjf).get("images", [])
+                    except Exception:
+                        pass
+                if not preferred_c_imgs:
+                    preferred_c_imgs = ch.get("images", [])
+                for c_cand in preferred_c_imgs:
+                    if (cd / c_cand).is_file():
+                        c_img_file = cd / c_cand
                         break
+                if not c_img_file and cd.exists():
+                    for f in sorted(cd.iterdir()):
+                        if f.is_file() and f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                            c_img_file = f
+                            break
             if c_img_file:
                 ref_images_used["characters"].append({
                     "name": cname,

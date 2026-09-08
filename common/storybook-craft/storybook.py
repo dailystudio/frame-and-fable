@@ -1355,8 +1355,8 @@ def extract_characters_from_story(
     api_key: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Automatically extract character information (names, visual DNA, portrait generation prompts)
-    from story markdown text.
+    Automatically extract character and creature information (names, categories: hero/boss/enemy,
+    roles, visual DNA, and portrait generation prompts) from story markdown text.
     Uses Gemini API if available, with intelligent heuristic fallback.
     """
     resolved_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -1369,18 +1369,23 @@ def extract_characters_from_story(
             client = None
 
     clean_text = strip_markdown_decorations(markdown_text)
-    sample_text = clean_text[:4000]
+    sample_text = clean_text[:35000]
 
     # 1. Try Gemini API extraction
     if client:
         try:
             prompt = (
-                "You are an expert storybook art director. Analyze the story below and identify the main characters (1 to 4 characters).\n"
-                "For each character, output:\n"
-                "- 'name': character's name (e.g. '布洛克·铁盾' or 'Nora')\n"
-                "- 'role': their role or title in the story (e.g. 'Guardian Warrior' or 'Space Explorer')\n"
-                "- 'visual_dna': detailed physical visual appearance (age, species/ethnicity, hair, eyes, facial features, clothing/armor, distinct marks). Describe ONLY their physical look on a plain background, without background scenes or actions.\n"
-                "- 'portrait_prompt': prompt to generate a solo character concept art portrait on a clean neutral white or light gray background, studio lighting, highly detailed concept art sheet.\n\n"
+                "You are an expert storybook art director and concept designer. Analyze the story below and extract the most important characters and creatures (up to 8 entities in total).\n"
+                "You MUST ensure you include BOTH heroes and any significant bosses or monster enemies that appear in the narrative:\n"
+                "1. Heroes / Protagonists / Allies (e.g. warriors, mages, healers)\n"
+                "2. Main Bosses / Titans / Ultimate Threats (e.g. 冰山巨兽, 信号聚合体, colossal creatures)\n"
+                "3. Key Mutated Enemies / Monster Minions (e.g. 冰箱怪 / 异变冰箱怪, 微波炉怪, 空调怪)\n\n"
+                "For each character or creature, output:\n"
+                "- 'name': entity's exact primary Chinese/narrative name WITHOUT any parentheses, transliterations, or aliases (e.g. write '布洛克·铁盾' NOT '布洛克·铁盾 (Brock Ironshield)'; write '冰箱怪', '冰山巨兽', '阿尔文·蓝焰', '米拉·布伦').\n"
+                "- 'category': strictly one of 'hero', 'boss', or 'enemy'\n"
+                "- 'role': concise role or archetype title (e.g. 'Guardian Berserker', 'Glacial Titan Boss', 'Mutated Appliance Monster')\n"
+                "- 'visual_dna': comprehensive physical visual appearance (scale, body structure, materials, colors, facial/eye details, cybernetic/magical anomalies). Describe ONLY their physical visual look against a plain background, without background scenes or plot actions.\n"
+                "- 'portrait_prompt': prompt to generate a centered solo concept art portrait on a clean neutral white or light gray background, studio lighting, highly detailed storybook concept art sheet.\n\n"
                 "Story text:\n"
                 f"{sample_text}\n\n"
                 "Return strictly valid JSON with key 'characters': [ { ... } ]"
@@ -1395,7 +1400,25 @@ def extract_characters_from_story(
                 data = json.loads(match.group(0))
                 chars = data.get("characters", [])
                 if chars:
-                    return chars
+                    normalized_chars = []
+                    seen_names = set()
+                    for ch in chars:
+                        raw_name = ch.get("name", "")
+                        clean_name = re.sub(r'[\(（].*?[\)）]', '', raw_name).strip(' "“\'')
+                        if not clean_name or clean_name in seen_names:
+                            continue
+                        seen_names.add(clean_name)
+                        ch["name"] = clean_name
+                        if "category" not in ch:
+                            if any(k in clean_name for k in ["巨兽", "聚合体", "首领", "魔王", "泰坦", "领主", "霸主"]):
+                                ch["category"] = "boss"
+                            elif any(k in clean_name for k in ["怪", "魔物", "异变", "畸变"]):
+                                ch["category"] = "enemy"
+                            else:
+                                ch["category"] = "hero"
+                        normalized_chars.append(ch)
+                    if normalized_chars:
+                        return normalized_chars[:8]
         except Exception:
             pass
 
@@ -1403,6 +1426,13 @@ def extract_characters_from_story(
     extracted: List[Dict[str, Any]] = []
     seen_names = set()
     no_comment_text = re.sub(r'<!--.*?-->', '', markdown_text, flags=re.DOTALL)
+
+    def determine_category(name: str) -> str:
+        if any(b in name for b in ["巨兽", "聚合体", "首领", "魔王", "泰坦", "领主", "霸主", "终极"]):
+            return "boss"
+        if any(e in name for e in ["怪", "魔物", "异变", "畸变", "机械生命", "生物", "小兵", "仆从"]):
+            return "enemy"
+        return "hero"
 
     # Pattern A: Bold character intros: **“磐石”——布洛克·铁盾（Brock Ironshield）** or **阿尔文·蓝焰**
     bold_matches = re.findall(r'\*\*(?:[“"”\']?[^”"\'—–\-\n]+[”"\'—–\-]*)?([^\*\n]{2,25})\*\*', no_comment_text)
@@ -1413,13 +1443,24 @@ def extract_characters_from_story(
         name_only = re.sub(r'[\(（].*?[\)）]', '', b_clean).strip('“"”\' ')
         if len(name_only) in range(2, 12) and name_only not in seen_names:
             if not name_only.startswith("的") and not any(p in name_only for p in ["。", "，", "！", "？", "、", "；", "：", ".", ",", "\"", "'"]):
-                if not any(stop in name_only for stop in ["前代文明", "古代遗产", "飞行器", "这片大陆", "然而", "但是", "虚空崩塌", "共鸣", "碎片", "脉络", "部分", "衡器", "怪"]):
+                if not any(stop in name_only for stop in ["前代文明", "古代遗产", "飞行器", "这片大陆", "然而", "但是", "虚空崩塌", "共鸣", "碎片", "脉络", "部分", "衡器"]):
                     seen_names.add(name_only)
-                    role = "Main Character"
-                    visual_dna = f"Story protagonist '{name_only}', iconic costume and features, neutral studio lighting, isolated portrait."
-                    portrait_prompt = f"Character concept portrait of {name_only}, neutral background, studio lighting, highly detailed storybook concept art"
+                    cat = determine_category(name_only)
+                    if cat == "boss":
+                        role = "Ancient Boss Titan"
+                        visual_dna = f"Towering formidable boss titan '{name_only}', glowing energy veins, menacing silhouette, neutral studio background."
+                        portrait_prompt = f"Concept art portrait of epic boss '{name_only}', imposing scale, glowing runic energy, highly detailed storybook concept art, neutral background"
+                    elif cat == "enemy":
+                        role = "Mutated Enemy Construct"
+                        visual_dna = f"Menacing mutated creature '{name_only}', sharp mechanical teeth, glowing warning eyes, icy/electrical sparks, neutral studio lighting."
+                        portrait_prompt = f"Creature concept portrait of '{name_only}', hostile mutated appearance, glowing red optics, neutral studio background, storybook monster sheet"
+                    else:
+                        role = "Main Hero"
+                        visual_dna = f"Story protagonist '{name_only}', iconic costume and features, neutral studio lighting, isolated portrait."
+                        portrait_prompt = f"Character concept portrait of {name_only}, neutral background, studio lighting, highly detailed storybook concept art"
                     extracted.append({
                         "name": name_only,
+                        "category": cat,
                         "role": role,
                         "visual_dna": visual_dna,
                         "portrait_prompt": portrait_prompt
@@ -1432,29 +1473,89 @@ def extract_characters_from_story(
             m_clean = m_clean.split("的")[0].strip()
         if len(m_clean) in range(2, 10) and m_clean not in seen_names:
             seen_names.add(m_clean)
+            cat = determine_category(m_clean)
             extracted.append({
                 "name": m_clean,
-                "role": "Adventurer",
+                "category": cat,
+                "role": "Adventurer" if cat == "hero" else ("Titan Boss" if cat == "boss" else "Creature"),
                 "visual_dna": f"Spirited young adventurer {m_clean}, curious expression, travel clothes, clean neutral background.",
                 "portrait_prompt": f"Character concept portrait of {m_clean}, young adventurer, expressive face, neutral gray background, storybook character design"
             })
 
-    # Pattern C: Check for magical companion / creatures (e.g. 小精灵)
+    # Pattern C: Boss and Monster extraction from narrative text (e.g. 冰箱怪, 微波炉怪, 冰山怪, 信号聚合体, 雷霆巨兽)
+    monster_matches = []
+    # Quoted monsters / bold monsters: “冰箱怪”, “冰山怪”, “信号聚合体”
+    monster_matches.extend(re.findall(r'[“"「]([^\s“”"「」]{2,10}(?:怪|巨兽|聚合体|畸变体|魔物))[”"」]', no_comment_text))
+    # Context verbs: 一只...怪, 巨大的...怪, 对抗...怪, 化身为...怪
+    monster_matches.extend(re.findall(r'(?:一只|数只|化身为|巨大的|形成|盘踞着|击碎|对抗|面对|消灭|与)(?:高达[^\s，。]+的)?(?:[“"「])?([^\s，。、“”"「」]{2,10}(?:怪|巨兽|聚合体|畸变体|魔物))(?:[”"」])?', no_comment_text))
+
+    for raw_m in monster_matches:
+        sub_names = [raw_m]
+        if "和" in raw_m:
+            sub_names = raw_m.split("和")
+        elif "与" in raw_m:
+            sub_names = raw_m.split("与")
+        for m in sub_names:
+            m_clean = m.strip().strip('“”"\' ')
+            if len(m_clean) in range(2, 10) and m_clean not in seen_names:
+                if not any(stop in m_clean for stop in ["前代", "这片", "然而", "但是", "碎片", "怪物", "各种", "机械生命"]):
+                    seen_names.add(m_clean)
+                    cat = determine_category(m_clean)
+                    if cat == "boss" or "冰山" in m_clean or "巨兽" in m_clean or "聚合体" in m_clean:
+                        cat = "boss"
+                        role = "Epic Boss Titan"
+                        if "冰山" in m_clean:
+                            role = "Glacial Titan Guardian"
+                            visual_dna = "Colossal ancient hundred-meter glacial titan formed from ancient blue ice and blizzard frost, glowing pale blue eyes, immense craggy ice shoulders, isolated on plain studio background."
+                            portrait_prompt = f"Concept art portrait of ancient glacial ice titan '{m_clean}', massive scale, glowing cold eyes, jagged ice crystal armor, clean neutral background, 8k storybook concept sheet"
+                        elif "信号" in m_clean:
+                            role = "High-Voltage Signal Aggregate Boss"
+                            visual_dna = "Towering electronic aggregate monster woven from tangled transmission towers, radar antennas, and high-voltage pulsing plasma arcs, blinding violet-blue electrical core, isolated on studio background."
+                            portrait_prompt = f"Concept art portrait of electrifying cybernetic boss '{m_clean}', entangled broadcast towers and lightning plasma coils, clean neutral gray background, storybook boss design"
+                        else:
+                            visual_dna = f"Towering primordial boss beast '{m_clean}', colossal mass, glowing runic aura, immense physical build, plain studio background."
+                            portrait_prompt = f"Concept art portrait of epic boss titan '{m_clean}', massive scale, glowing runic power, highly detailed storybook concept art"
+                    else:
+                        cat = "enemy"
+                        role = "Mutated Appliance Monster"
+                        if "冰箱" in m_clean:
+                            role = "Mutated Frost Appliance Monster"
+                            visual_dna = "Double-door refrigerator mutated into a ferocious beast: jagged metal saw-blade teeth in hinged jaws, two glowing blood-red indicator light eyes, venting dense subzero frost clouds, isolated on plain background."
+                            portrait_prompt = f"Creature concept portrait of ferocious mutated refrigerator monster '{m_clean}', serrated steel teeth, icy steam, glowing red mechanical eyes, studio lighting, clean isolated background"
+                        elif "微波炉" in m_clean:
+                            role = "Mutated Thermal Appliance Monster"
+                            visual_dna = "Industrial microwave mutated with fiery glowing heating coils, crackling orange electric sparks, distorted metal claws, venting intense heat waves, plain studio background."
+                            portrait_prompt = f"Creature design portrait of mutated appliance monster '{m_clean}', glowing orange heating element teeth, metallic claws, studio lighting, clean isolated background"
+                        else:
+                            visual_dna = f"Mutated machine monster '{m_clean}', sharp mechanical components, glowing hostile sensory optics, distorted metallic shell, isolated plain background."
+                            portrait_prompt = f"Creature design portrait of storybook monster '{m_clean}', distorted mechanical features, glowing optics, clean neutral background"
+
+                    extracted.append({
+                        "name": m_clean,
+                        "category": cat,
+                        "role": role,
+                        "visual_dna": visual_dna,
+                        "portrait_prompt": portrait_prompt
+                    })
+
+    # Pattern D: Magical companion (e.g. 小精灵)
     if "小精灵" in no_comment_text and "小精灵" not in seen_names:
         seen_names.add("小精灵")
         extracted.append({
             "name": "小精灵",
-            "role": "Forest Spirit",
+            "category": "hero",
+            "role": "Forest Spirit Ally",
             "visual_dna": "Tiny translucent glowing forest fairy, delicate wings, luminous blue particle aura, friendly expression.",
             "portrait_prompt": "Concept art of a glowing miniature translucent forest fairy, delicate ethereal wings, luminous blue light, clean isolated background"
         })
 
-    # Pattern D: English pilot / named ([A-Z][a-z]+)
+    # Pattern E: English named hero/pilot
     for m in re.findall(r'(?:named|pilot|hero)\s+([A-Z][a-z]+)', no_comment_text):
         if m not in seen_names and len(m) > 2:
             seen_names.add(m)
             extracted.append({
                 "name": m,
+                "category": "hero",
                 "role": "Explorer",
                 "visual_dna": f"Adventurous explorer {m}, distinctive uniform, determined expression, isolated character sheet.",
                 "portrait_prompt": f"Character design concept portrait of {m}, sci-fi / fantasy explorer, highly detailed, neutral gray background"
@@ -1463,12 +1564,13 @@ def extract_characters_from_story(
     if not extracted:
         extracted.append({
             "name": "Protagonist",
+            "category": "hero",
             "role": "Story Protagonist",
             "visual_dna": "Heroic story protagonist with expressive features, iconic storybook travel attire, clean neutral studio lighting.",
             "portrait_prompt": "Storybook protagonist character concept sheet, isolated on neutral background, highly detailed 8k portrait"
         })
 
-    return extracted[:4]
+    return extracted[:8]
 
 
 def extract_style_from_story(
@@ -1664,6 +1766,7 @@ def setup_workspace_assets(
 
             char_info = {
                 "name": char_name,
+                "category": existing_info.get("category", "hero"),
                 "role": existing_info.get("role", "User Specified"),
                 "visual_dna": existing_info.get("visual_dna", f"Character {char_name}"),
                 "portrait_prompt": existing_info.get("portrait_prompt", f"Portrait of {char_name}"),
@@ -1687,6 +1790,7 @@ def setup_workspace_assets(
                     rem_ordered_imgs.append(di)
             rem_char_info = {
                 "name": remaining_name,
+                "category": rem_info.get("category", "hero"),
                 "role": rem_info.get("role", "Character"),
                 "visual_dna": rem_info.get("visual_dna", f"Character {remaining_name}"),
                 "portrait_prompt": rem_info.get("portrait_prompt", f"Portrait of {remaining_name}"),
@@ -1709,13 +1813,27 @@ def setup_workspace_assets(
                     except Exception:
                         pass
                 if not c_info:
+                    cat = "hero"
+                    if any(k in cdir.name for k in ["巨兽", "聚合体", "首领", "魔王", "泰坦", "领主"]):
+                        cat = "boss"
+                    elif any(k in cdir.name for k in ["怪", "魔物", "异变", "畸变"]):
+                        cat = "enemy"
                     c_info = {
                         "name": cdir.name,
+                        "category": cat,
                         "role": "Character",
                         "visual_dna": f"Character {cdir.name}",
                         "portrait_prompt": f"Portrait of {cdir.name}",
                         "source": "auto_extracted"
                     }
+                else:
+                    if "category" not in c_info:
+                        cat = "hero"
+                        if any(k in cdir.name for k in ["巨兽", "聚合体", "首领", "魔王", "泰坦", "领主"]):
+                            cat = "boss"
+                        elif any(k in cdir.name for k in ["怪", "魔物", "异变", "畸变"]):
+                            cat = "enemy"
+                        c_info["category"] = cat
                 disk_imgs = find_reference_images(cdir)
 
                 if generate_images and not disk_imgs:
@@ -1817,6 +1935,7 @@ def setup_workspace_assets(
 
                 c_data = {
                     "name": cname,
+                    "category": c.get("category", "hero"),
                     "role": c.get("role", "Character"),
                     "visual_dna": c.get("visual_dna", ""),
                     "portrait_prompt": c.get("portrait_prompt", ""),
@@ -2458,9 +2577,11 @@ def compose_reference_prompt(
 
     for ch in char_refs:
         cname = ch.get("name", "Character")
+        cat = ch.get("category", "hero")
+        cat_label = "Boss Titan / Nemesis" if cat == "boss" else ("Mutated Enemy / Monster" if cat == "enemy" else "Character")
         ref_roles.append(
-            f"- Reference Image {current_img_idx} (Character Identity Reference: {cname}):\n"
-            f"  * Maintain the exact character visual identity, facial features, hairstyle, clothing design, colors, and proportions of {cname} from Image {current_img_idx}.\n"
+            f"- Reference Image {current_img_idx} ({cat_label} Identity Reference: {cname}):\n"
+            f"  * Maintain the exact visual identity, anatomy, materials, facial features, colors, and proportions of {cname} from Image {current_img_idx}.\n"
             f"  * Place {cname} naturally into this new scene, dynamically adopting the action, pose, and emotion specified in the SCENE DESCRIPTION.\n"
             f"  * Do NOT replicate the pose, camera framing, or background of Image {current_img_idx}."
         )
@@ -2503,14 +2624,26 @@ def resolve_tag_references(
 ) -> Dict[str, Any]:
     """
     Resolves the complete reference context for a media tag:
-    - style reference image and prompt (always attached if available)
-    - matched character reference images and visual DNA (only if context requires them)
+    - style reference image and prompt (always attached if available, scene override checked first)
+    - matched character reference images and visual DNA (context matched, scene override checked first)
     - the final composed model prompt filled into the strict anti-modification template
     - the executable CLI command to generate this asset
     """
     tag_id = tag.get("id", "")
     tag_type = tag.get("type", "image")
     prompt = tag.get("prompt", "")
+
+    # Load scene overrides from workspace settings.json
+    scene_overrides: Dict[str, Any] = {}
+    if workspace and (workspace.workspace_dir / "settings.json").exists():
+        try:
+            with open(workspace.workspace_dir / "settings.json", "r", encoding="utf-8") as sf:
+                ws_settings = json.load(sf)
+                scene_overrides = ws_settings.get("scenes", {}).get(tag_id, {})
+        except Exception:
+            pass
+    if tag.get("scene_overrides"):
+        scene_overrides.update(tag.get("scene_overrides"))
 
     # Load characters if not passed
     all_chars = characters or []
@@ -2530,27 +2663,35 @@ def resolve_tag_references(
         except Exception:
             pass
 
-    # Resolve Style Reference Image
+    # Resolve Style Reference Image (check scene override first)
     style_img_path = None
     style_img_name = None
+    is_style_override = False
+    scene_style = scene_overrides.get("style_ref") or tag.get("style_ref")
+
     if workspace and workspace.style_ref_dir.exists():
-        candidates = sorted(
-            list(workspace.style_ref_dir.glob("*.png")) +
-            list(workspace.style_ref_dir.glob("*.PNG")) +
-            list(workspace.style_ref_dir.glob("*.jpg")) +
-            list(workspace.style_ref_dir.glob("*.jpeg"))
-        )
-        if candidates:
-            if active_style.get("images"):
-                for pref in active_style["images"]:
-                    matched = next((c for c in candidates if c.name == pref), None)
-                    if matched:
-                        style_img_path = matched
-                        style_img_name = matched.name
-                        break
-            if not style_img_path:
-                style_img_path = candidates[0]
-                style_img_name = style_img_path.name
+        if scene_style and (workspace.style_ref_dir / scene_style).is_file():
+            style_img_path = workspace.style_ref_dir / scene_style
+            style_img_name = scene_style
+            is_style_override = True
+        else:
+            candidates = sorted(
+                list(workspace.style_ref_dir.glob("*.png")) +
+                list(workspace.style_ref_dir.glob("*.PNG")) +
+                list(workspace.style_ref_dir.glob("*.jpg")) +
+                list(workspace.style_ref_dir.glob("*.jpeg"))
+            )
+            if candidates:
+                if active_style.get("images"):
+                    for pref in active_style["images"]:
+                        matched = next((c for c in candidates if c.name == pref), None)
+                        if matched:
+                            style_img_path = matched
+                            style_img_name = matched.name
+                            break
+                if not style_img_path:
+                    style_img_path = candidates[0]
+                    style_img_name = style_img_path.name
 
     style_ref_info = None
     if style_img_path:
@@ -2559,6 +2700,7 @@ def resolve_tag_references(
             "path": str(style_img_path),
             "style_name": active_style.get("style_name", "Default Art Style"),
             "style_prompt": active_style.get("style_prompt", ""),
+            "is_scene_override": is_style_override,
             "role": "Style Reference (Always Active)"
         }
 
@@ -2567,42 +2709,54 @@ def resolve_tag_references(
     char_refs_info = []
     char_img_paths = []
 
+    scene_char_refs = scene_overrides.get("character_refs", {})
+    if isinstance(tag.get("character_refs"), dict):
+        scene_char_refs.update(tag.get("character_refs"))
+
     for ch in matched_chars:
         cname = ch.get("name", "")
         c_img_path = None
         c_img_name = None
+        is_char_override = False
+
         if workspace and workspace.char_ref_dir.exists():
             c_dir = workspace.char_ref_dir / cname
             if c_dir.exists():
-                c_candidates = sorted(
-                    list(c_dir.glob("*.png")) +
-                    list(c_dir.glob("*.PNG")) +
-                    list(c_dir.glob("*.jpg")) +
-                    list(c_dir.glob("*.jpeg"))
-                )
-                if c_candidates:
-                    # First check c_dir / "character.json" for authoritative image preference
-                    pref_list = []
-                    c_json_p = c_dir / "character.json"
-                    if c_json_p.exists():
-                        try:
-                            with open(c_json_p, "r", encoding="utf-8") as f:
-                                pref_list = json.load(f).get("images", [])
-                        except Exception:
-                            pass
-                    if not pref_list:
-                        pref_list = ch.get("images", [])
+                # 1. Check scene override first!
+                if cname in scene_char_refs and (c_dir / scene_char_refs[cname]).is_file():
+                    c_img_path = c_dir / scene_char_refs[cname]
+                    c_img_name = scene_char_refs[cname]
+                    is_char_override = True
+                else:
+                    c_candidates = sorted(
+                        list(c_dir.glob("*.png")) +
+                        list(c_dir.glob("*.PNG")) +
+                        list(c_dir.glob("*.jpg")) +
+                        list(c_dir.glob("*.jpeg"))
+                    )
+                    if c_candidates:
+                        # 2. Check c_dir / "character.json" for authoritative image preference
+                        pref_list = []
+                        c_json_p = c_dir / "character.json"
+                        if c_json_p.exists():
+                            try:
+                                with open(c_json_p, "r", encoding="utf-8") as f:
+                                    pref_list = json.load(f).get("images", [])
+                            except Exception:
+                                pass
+                        if not pref_list:
+                            pref_list = ch.get("images", [])
 
-                    if pref_list:
-                        for pref in pref_list:
-                            matched = next((c for c in c_candidates if c.name == pref), None)
-                            if matched:
-                                c_img_path = matched
-                                c_img_name = matched.name
-                                break
-                    if not c_img_path:
-                        c_img_path = c_candidates[0]
-                        c_img_name = c_img_path.name
+                        if pref_list:
+                            for pref in pref_list:
+                                matched = next((c for c in c_candidates if c.name == pref), None)
+                                if matched:
+                                    c_img_path = matched
+                                    c_img_name = matched.name
+                                    break
+                        if not c_img_path:
+                            c_img_path = c_candidates[0]
+                            c_img_name = c_img_path.name
 
         if not c_img_path and ch.get("images"):
             c_img_name = ch["images"][0]
@@ -2614,10 +2768,12 @@ def resolve_tag_references(
 
         char_refs_info.append({
             "name": cname,
+            "category": ch.get("category", "hero"),
             "role": ch.get("role", "Character"),
             "visual_dna": ch.get("visual_dna", ""),
             "image": c_img_name,
             "path": str(c_img_path) if c_img_path else "",
+            "is_scene_override": is_char_override,
             "role_guide": f"Character Identity Reference: {cname} (Context Matched)"
         })
 

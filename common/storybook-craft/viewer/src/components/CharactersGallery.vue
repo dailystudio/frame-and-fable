@@ -10,6 +10,18 @@
       </div>
 
       <div class="header-badges">
+        <button
+          type="button"
+          class="clean-btn clean-btn-sm extract-chars-btn"
+          :disabled="isExtracting"
+          title="Analyze story markdown and extract characters, villains, bosses, and enemies"
+          @click="onExtractCharacters"
+        >
+          <span class="material-symbols-rounded" :class="{ 'spin-icon': isExtracting }">
+            {{ isExtracting ? 'sync' : 'auto_fix_high' }}
+          </span>
+          <span>{{ isExtracting ? 'Extracting...' : 'Extract Characters & Bosses' }}</span>
+        </button>
         <span class="clean-badge">
           <span class="material-symbols-rounded">face</span>
           {{ characters.length }} Characters
@@ -21,17 +33,58 @@
       </div>
     </div>
 
+    <!-- Category Filter Bar -->
+    <div v-if="characters.length > 0" class="category-filter-bar">
+      <button
+        type="button"
+        class="cat-filter-btn"
+        :class="{ active: activeCategoryFilter === 'all' }"
+        @click="activeCategoryFilter = 'all'"
+      >
+        All ({{ characters.length }})
+      </button>
+      <button
+        type="button"
+        class="cat-filter-btn hero-tab"
+        :class="{ active: activeCategoryFilter === 'hero' }"
+        @click="activeCategoryFilter = 'hero'"
+      >
+        <span class="material-symbols-rounded tab-icon">shield_person</span>
+        Heroes & Allies ({{ heroesCount }})
+      </button>
+      <button
+        v-if="bossesCount > 0"
+        type="button"
+        class="cat-filter-btn boss-tab"
+        :class="{ active: activeCategoryFilter === 'boss' }"
+        @click="activeCategoryFilter = 'boss'"
+      >
+        <span class="material-symbols-rounded tab-icon">skull</span>
+        Bosses & Titans ({{ bossesCount }})
+      </button>
+      <button
+        v-if="enemiesCount > 0"
+        type="button"
+        class="cat-filter-btn enemy-tab"
+        :class="{ active: activeCategoryFilter === 'enemy' }"
+        @click="activeCategoryFilter = 'enemy'"
+      >
+        <span class="material-symbols-rounded tab-icon">pest_control</span>
+        Enemies & Monsters ({{ enemiesCount }})
+      </button>
+    </div>
+
     <!-- Empty State -->
     <div v-if="characters.length === 0" class="empty-state clean-card">
       <span class="material-symbols-rounded empty-icon">person_off</span>
       <h3>No Characters Extracted</h3>
-      <p>Run <code>python storybook.py assets &lt;story.md&gt;</code> to extract characters into this workspace.</p>
+      <p>Run <code>python storybook.py assets &lt;story.md&gt;</code> or click "Extract Characters & Bosses" above to extract characters into this workspace.</p>
     </div>
 
     <!-- Character Cards Grid -->
     <div v-else class="character-grid">
       <div
-        v-for="char in characters"
+        v-for="char in filteredCharacters"
         :key="char.name"
         class="char-card clean-card"
       >
@@ -53,6 +106,9 @@
             <div class="char-banner-foreground">
               <h3 class="char-banner-name">{{ char.name }}</h3>
               <div class="char-banner-meta">
+                <span class="banner-pill category-pill" :class="`cat-${char.category || 'hero'}`">
+                  {{ getCategoryLabel(char.category) }}
+                </span>
                 <span class="banner-pill role-pill">{{ char.role || 'Character' }}</span>
                 <span v-if="char.images?.length" class="banner-pill count-pill">
                   <span class="material-symbols-rounded">photo_camera</span>
@@ -198,7 +254,12 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { getCharImageUrl, uploadReferenceImage, deleteReferenceImage } from '../services/api';
+import {
+  getCharImageUrl,
+  uploadReferenceImage,
+  deleteReferenceImage,
+  extractCharacters
+} from '../services/api';
 
 const props = defineProps({
   stem: {
@@ -212,6 +273,47 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['preview', 'refresh']);
+
+const isExtracting = ref(false);
+const activeCategoryFilter = ref('all');
+
+const heroesCount = computed(() => props.characters.filter(c => !c.category || c.category === 'hero').length);
+const bossesCount = computed(() => props.characters.filter(c => c.category === 'boss').length);
+const enemiesCount = computed(() => props.characters.filter(c => c.category === 'enemy').length);
+
+const filteredCharacters = computed(() => {
+  if (activeCategoryFilter.value === 'hero') {
+    return props.characters.filter(c => !c.category || c.category === 'hero');
+  }
+  if (activeCategoryFilter.value === 'boss') {
+    return props.characters.filter(c => c.category === 'boss');
+  }
+  if (activeCategoryFilter.value === 'enemy') {
+    return props.characters.filter(c => c.category === 'enemy');
+  }
+  return props.characters;
+});
+
+function getCategoryLabel(category) {
+  if (category === 'boss') return 'Boss Titan';
+  if (category === 'enemy') return 'Monster';
+  return 'Hero / Ally';
+}
+
+async function onExtractCharacters() {
+  if (isExtracting.value || !props.stem) return;
+  isExtracting.value = true;
+  try {
+    const res = await extractCharacters(props.stem);
+    emit('refresh');
+    alert(`✨ Extracted ${res.extracted_count} characters, bosses, and creatures!`);
+  } catch (err) {
+    console.error('Failed to extract characters:', err);
+    alert(`Failed to extract characters: ${err.message}`);
+  } finally {
+    isExtracting.value = false;
+  }
+}
 
 async function onUploadPhoto(event, charName) {
   const file = event.target.files?.[0];
@@ -461,6 +563,26 @@ async function copyPrompt(prompt, name) {
   backdrop-filter: blur(8px);
 }
 
+.banner-pill.category-pill.cat-hero {
+  background: rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
+  border: 1px solid rgba(16, 185, 129, 0.6);
+}
+
+.banner-pill.category-pill.cat-boss {
+  background: rgba(225, 29, 72, 0.45);
+  color: #fecdd3;
+  border: 1px solid rgba(244, 63, 94, 0.7);
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(225, 29, 72, 0.35);
+}
+
+.banner-pill.category-pill.cat-enemy {
+  background: rgba(245, 158, 11, 0.4);
+  color: #fef3c7;
+  border: 1px solid rgba(245, 158, 11, 0.65);
+}
+
 .banner-pill.role-pill {
   background: rgba(255, 255, 255, 0.22);
   color: #ffffff;
@@ -475,6 +597,99 @@ async function copyPrompt(prompt, name) {
 
 .banner-pill .material-symbols-rounded {
   font-size: 13px;
+}
+
+/* Category Filter Bar */
+.category-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.25rem 0;
+}
+
+.cat-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.85rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cat-filter-btn:hover {
+  background: var(--bg-surface-secondary);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.cat-filter-btn.active {
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  border-color: var(--text-primary);
+}
+
+.cat-filter-btn .tab-icon {
+  font-size: 16px;
+}
+
+.cat-filter-btn.hero-tab.active {
+  background: #059669;
+  color: #ffffff;
+  border-color: #059669;
+}
+
+.cat-filter-btn.boss-tab.active {
+  background: #e11d48;
+  color: #ffffff;
+  border-color: #e11d48;
+}
+
+.cat-filter-btn.enemy-tab.active {
+  background: #d97706;
+  color: #ffffff;
+  border-color: #d97706;
+}
+
+/* Extract Button */
+.extract-chars-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--accent-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.extract-chars-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.extract-chars-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .banner-zoom-hint {
