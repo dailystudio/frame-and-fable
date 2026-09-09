@@ -533,3 +533,26 @@
   padding-bottom: 0.4rem;
   font-style: italic;
 }
+
+/* 3. Pure Article Read Mode Media */
+.story-read-media {
+  margin: 2rem auto;
+  text-align: center;
+  line-height: 0;
+}
+
+.story-markdown .story-read-media .story-article-img {
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-sm) !important;
+  display: block !important;
+  margin: 0 auto !important;
+  cursor: zoom-in !important;
+  transition: opacity 0.15s ease, box-shadow 0.2s ease;
+}
+
+.story-markdown .story-read-media .story-article-img:hover {
+  opacity: 0.97;
+  box-shadow: var(--shadow-md) !important;
+}

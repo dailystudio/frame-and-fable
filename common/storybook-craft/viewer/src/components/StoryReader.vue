@@ -42,7 +42,9 @@
           </button>
         </div>
 
+        <!-- Add Scene Tag (Edit mode only) -->
         <button
+          v-if="readerMode === 'edit'"
           type="button"
           class="clean-btn clean-btn-sm add-scene-toolbar-btn"
           title="Add a new image/video scene tag into the story"
@@ -55,22 +57,46 @@
         <button
           type="button"
           class="clean-btn clean-btn-sm"
-          @click="showRaw = !showRaw"
+          @click="toggleRawView"
         >
           <span class="material-symbols-rounded">
             {{ showRaw ? 'menu_book' : 'code' }}
           </span>
           {{ showRaw ? 'Story View' : 'Raw Markdown' }}
         </button>
+
+        <!-- Mode Selection Button (Top Right Corner) -->
+        <div class="reader-mode-switch" role="group" aria-label="Reader Mode Selection">
+          <button
+            type="button"
+            class="mode-switch-btn"
+            :class="{ active: readerMode === 'edit' }"
+            title="Edit Mode: manage tags, prompts, generation"
+            @click="setReaderMode('edit')"
+          >
+            <span class="material-symbols-rounded">edit_note</span>
+            <span>Edit Mode</span>
+          </button>
+          <button
+            type="button"
+            class="mode-switch-btn"
+            :class="{ active: readerMode === 'read' }"
+            title="Read Mode: clean article view without editing controls or frames"
+            @click="setReaderMode('read')"
+          >
+            <span class="material-symbols-rounded">auto_stories</span>
+            <span>Read Mode</span>
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- Reader Guidance Hint Banner -->
-    <div class="reader-hint-banner clean-card">
+    <!-- Reader Guidance Hint Banner (Edit Mode Only) -->
+    <div v-if="readerMode === 'edit'" class="reader-hint-banner clean-card">
       <div class="hint-left">
         <span class="material-symbols-rounded hint-icon">tips_and_updates</span>
         <span>
-          <strong>Scene Tag Tips:</strong> Hover between any two paragraphs in the story to insert an inline scene tag (<strong>+ Add Scene Tag Here</strong>), or click <strong>+ Add Scene Tag</strong> in the toolbar.
+          <strong>Scene Tag Tips:</strong> Hover between any two paragraphs in the story to insert an inline scene tag (<strong>+ Add Scene Tag Here</strong>), or click <strong>+ Add Scene Tag</strong> in the toolbar. Switch to <strong>Read Mode</strong> on the top right for a clean article view.
         </span>
       </div>
     </div>
@@ -100,6 +126,7 @@
     <div
       v-else
       class="story-sheet clean-card"
+      :class="readerMode === 'read' ? 'mode-read' : 'mode-edit'"
       :style="{ '--reader-font-scale': fontSizeMultiplier }"
       @click="handleContentClick"
     >
@@ -143,9 +170,21 @@ const props = defineProps({
 
 const emit = defineEmits(['preview', 'refresh', 'open-add-tag']);
 
+const readerMode = ref('edit'); // 'edit' | 'read'
 const showRaw = ref(false);
 const rawCopied = ref(false);
 const fontSizeMultiplier = ref(1.0);
+
+function setReaderMode(mode) {
+  readerMode.value = mode;
+  if (showRaw.value) {
+    showRaw.value = false;
+  }
+}
+
+function toggleRawView() {
+  showRaw.value = !showRaw.value;
+}
 
 const activeGeneratingTags = ref(new Set());
 const generationVersion = ref(0);
@@ -181,6 +220,7 @@ const renderedHtml = computed(() => {
   if (!props.markdownContent) return '';
   const _v = generationVersion.value;
   const _activeMap = generationState.activeMap;
+  const isRead = readerMode.value === 'read';
 
   let text = props.markdownContent;
 
@@ -262,13 +302,28 @@ const renderedHtml = computed(() => {
 
       let cardHtml = '';
 
-      if (isGenerated) {
-        // Embedded visual card with media, prominent Regenerate Scene button, and inspect button
-        const mediaHtml = tagType === 'video'
-          ? `<video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata" data-tag-id="${tagId}"></video>`
-          : `<img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-tag-id="${tagId}" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" />`;
+      if (isRead) {
+        // READ MODE:
+        // Hide control panel and frame of image, just markdown text with images and video like final output
+        if (isGenerated) {
+          if (tagType === 'video') {
+            cardHtml = `<div class="story-video-wrap"><video src="${matched.assetUrl}" controls preload="metadata" class="story-article-video"></video></div>`;
+          } else {
+            cardHtml = `<div class="story-read-media"><img src="${matched.assetUrl}" alt="${tagSection || tagId}" class="story-article-img" data-tag-id="${tagId}" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" loading="lazy" /></div>`;
+          }
+        } else {
+          // In read mode, pending ungenerated scene tags are completely omitted
+          cardHtml = '';
+        }
+      } else {
+        // EDIT MODE:
+        if (isGenerated) {
+          // Embedded visual card with media, prominent Regenerate Scene button, and inspect button
+          const mediaHtml = tagType === 'video'
+            ? `<video src="${matched.assetUrl}" controls class="embedded-video" preload="metadata" data-tag-id="${tagId}"></video>`
+            : `<img src="${matched.assetUrl}" alt="${tagId}" class="embedded-img" data-tag-id="${tagId}" data-clickable-preview="true" data-src="${matched.assetUrl}" data-prompt="${encodeURIComponent(tagPrompt)}" data-title="${tagId}" />`;
 
-        cardHtml = `<div class="embedded-scene-card type-${tagType}" data-tag-id="${tagId}">
+          cardHtml = `<div class="embedded-scene-card type-${tagType}" data-tag-id="${tagId}">
   <div class="scene-top-bar">
     <div class="scene-top-row">
       <div class="scene-top-left">
@@ -304,12 +359,12 @@ const renderedHtml = computed(() => {
     ${mediaHtml}
   </div>
 </div>`;
-      } else {
-        // Clean, compact placeholder with Generate Scene button and inspect button
-        const typeLabel = tagType === 'video' ? 'Video' : 'Image';
-        const typeIcon = tagType === 'video' ? 'videocam' : 'image';
+        } else {
+          // Clean, compact placeholder with Generate Scene button and inspect button
+          const typeLabel = tagType === 'video' ? 'Video' : 'Image';
+          const typeIcon = tagType === 'video' ? 'videocam' : 'image';
 
-        cardHtml = `<div class="story-scene-placeholder type-${tagType}"
+          cardHtml = `<div class="story-scene-placeholder type-${tagType}"
      data-tag-id="${tagId}"
      data-tag-type="${tagType}"
      data-tag-section="${tagSection}"
@@ -346,6 +401,11 @@ const renderedHtml = computed(() => {
     <div class="chars-strip-list">${charChipsHtml}</div>
   </div>` : ''}
 </div>`;
+        }
+      }
+
+      if (!cardHtml) {
+        return '';
       }
 
       const slotToken = `%%STORYBOOK_MEDIA_SLOT_${slotCounter++}%%`;
@@ -364,13 +424,60 @@ const renderedHtml = computed(() => {
     html = html.replace(`<p>${token}</p>`, cardHtml).replace(token, cardHtml);
   }
 
-  // Add sleek hover insertion zones after narrative paragraphs
-  html = html.replace(/<\/p>/g, '</p><div class="para-insert-zone"><button type="button" class="para-insert-btn" data-action="insert-tag-here" title="Insert new image/video scene tag here"><span class="material-symbols-rounded">add</span><span>+ Add Scene Tag Here</span></button></div>');
+  // In Edit mode only: Add sleek hover insertion zones after narrative paragraphs
+  if (!isRead) {
+    html = html.replace(/<\/p>/g, '</p><div class="para-insert-zone"><button type="button" class="para-insert-btn" data-action="insert-tag-here" title="Insert new image/video scene tag here"><span class="material-symbols-rounded">add</span><span>+ Add Scene Tag Here</span></button></div>');
+  }
 
   return html;
 });
 
 function handleContentClick(event) {
+  // In Read Mode: allow clicking on images to preview lightbox, but ignore edit actions
+  if (readerMode.value === 'read') {
+    const imgTarget = event.target.closest('img');
+    if (imgTarget) {
+      const src = imgTarget.getAttribute('src') || '';
+      const alt = imgTarget.getAttribute('alt') || 'Scene Illustration';
+      const tagId = imgTarget.dataset.tagId || '';
+
+      const filename = src.split('/').pop().split('?')[0];
+      const baseName = filename.replace(/\.[^/.]+$/, "");
+      const enriched = (props.tags || []).find(t =>
+        (tagId && t.id === tagId) ||
+        t.id === baseName ||
+        filename.includes(t.id) ||
+        t.id === alt
+      );
+
+      const resolvedTagId = enriched?.id || tagId || baseName;
+      const resolvedPrompt = enriched?.prompt || (imgTarget.dataset.prompt ? decodeURIComponent(imgTarget.dataset.prompt) : alt);
+
+      emit('preview', {
+        src,
+        title: enriched ? `[${(enriched.type || 'image').toUpperCase()}] ${enriched.id}${enriched.section ? ' - ' + enriched.section : ''}` : alt,
+        type: enriched?.type || 'image',
+        id: resolvedTagId,
+        tagId: resolvedTagId,
+        stem: props.stem,
+        section: enriched?.section || '',
+        prompt: resolvedPrompt,
+        composedPrompt: enriched?.composed_prompt || '',
+        styleRef: enriched?.style_ref || null,
+        characterRefs: enriched?.character_refs || [],
+        cliCommand: enriched?.cli_command || '',
+        details: {
+          TagID: resolvedTagId,
+          Type: (enriched?.type || 'image') === 'video' ? 'Video Scene' : 'Image Scene',
+          Section: enriched?.section || 'N/A',
+          Workspace: props.stem,
+          Context: 'Story Reader (Read Mode)'
+        }
+      });
+    }
+    return;
+  }
+
   // 0. Clicked on insert scene tag trigger between paragraphs
   const insertBtn = event.target.closest('[data-action="insert-tag-here"]');
   if (insertBtn) {
@@ -768,5 +875,119 @@ async function copyRaw() {
 .hint-icon {
   font-size: 1.2rem;
   color: var(--primary, #6750a4);
+}
+
+/* Mode Selection Button Group (Top Right Corner) */
+.reader-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+}
+
+.mode-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: transparent;
+  padding: 0.28rem 0.75rem;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+  line-height: 1.2;
+}
+
+.mode-switch-btn .material-symbols-rounded {
+  font-size: 16px;
+}
+
+.mode-switch-btn:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="dark"] .mode-switch-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mode-switch-btn.active {
+  background: var(--accent-primary);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.25);
+}
+
+.read-mode-badge {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent-primary);
+  border-color: rgba(37, 99, 235, 0.25);
+}
+
+/* Pure Read Mode Styling */
+.story-sheet.mode-read {
+  border-color: var(--border-subtle);
+}
+
+:deep(.story-read-media) {
+  margin: 2.2rem auto;
+  text-align: center;
+  line-height: 0;
+}
+
+:deep(.story-read-media .story-article-img) {
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-sm) !important;
+  display: block !important;
+  margin: 0 auto !important;
+  cursor: zoom-in !important;
+  transition: opacity 0.15s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+:deep(.story-read-media .story-article-img:hover) {
+  opacity: 0.97;
+  box-shadow: var(--shadow-md) !important;
+}
+
+:deep(.story-article-video) {
+  width: 100%;
+  max-height: 520px;
+  display: block;
+  border-radius: var(--radius-md);
+}
+
+/* Read Mode safety hiding rules */
+.story-sheet.mode-read :deep(.para-insert-zone),
+.story-sheet.mode-read :deep(.story-scene-placeholder),
+.story-sheet.mode-read :deep(.scene-top-bar) {
+  display: none !important;
+}
+
+.story-sheet.mode-read :deep(.embedded-scene-card) {
+  margin: 2.2rem 0 !important;
+  border: none !important;
+  border-left: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+.story-sheet.mode-read :deep(.embedded-scene-card .scene-media-box) {
+  background: transparent !important;
+  border-radius: var(--radius-md) !important;
+}
+
+.story-sheet.mode-read :deep(.embedded-scene-card .embedded-img) {
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-sm) !important;
 }
 </style>
