@@ -596,8 +596,257 @@ def bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty=None
     print(f"[Blender Binder] Rigged lower garment '{lower_mesh.name}' with {len(lower_mesh.vertex_groups)} vertex groups.")
 
 
+def align_dress_garment(dress_mesh, body_mesh, armature):
+    """
+    Align full-length dress (e.g. gown, tube dress) to body using anatomical landmarks:
+    - Piecewise vertical deformation across bodice, pelvic rise, and skirt.
+    - Bodice targets high bust / neck base, fitting chest curvature and waistline.
+    - Pelvis rises and tapers smoothly across greater trochanters and hips.
+    - Skirt flaring gracefully descends to floor/ankle level without clipping footwear.
+    """
+    spine2_bone = armature.data.bones.get("mixamorig_Spine2") or armature.data.bones.get("Spine2")
+    spine_bone = armature.data.bones.get("mixamorig_Spine") or armature.data.bones.get("Spine")
+    hips_bone = armature.data.bones.get("mixamorig_Hips") or armature.data.bones.get("Hips")
+    neck_bone = armature.data.bones.get("mixamorig_Neck") or armature.data.bones.get("Neck")
+    l_foot_bone = armature.data.bones.get("mixamorig_LeftFoot") or armature.data.bones.get("LeftFoot")
+
+    if not (spine_bone and hips_bone and neck_bone and l_foot_bone):
+        return
+
+    p_spine2 = armature.matrix_world @ (spine2_bone.head_local if spine2_bone else spine_bone.head_local)
+    p_spine = armature.matrix_world @ spine_bone.head_local
+    p_hips = armature.matrix_world @ hips_bone.head_local
+    p_neck = armature.matrix_world @ neck_bone.head_local
+    p_lfoot = armature.matrix_world @ l_foot_bone.head_local
+
+    dpts = np.array([v.co for v in dress_mesh.data.vertices])
+    bpts = np.array([v.co for v in body_mesh.data.vertices])
+
+    z_min = float(dpts[:, 2].min())
+    z_max = float(dpts[:, 2].max())
+    total_h = z_max - z_min
+
+    # 1. Identify raw dress landmarks
+    # Waist: minimum cross-sectional area in upper half [60% to 92% of height]
+    z_search = np.linspace(z_min + 0.60 * total_h, z_min + 0.92 * total_h, 30)
+    min_area = float('inf')
+    raw_waist_z = None
+    raw_waist_w = None
+    raw_waist_d = None
+    raw_waist_cy = None
+    for z in z_search:
+        sl = dpts[np.abs(dpts[:, 2] - z) < 0.015]
+        if len(sl) > 20:
+            w = float(sl[:, 0].ptp())
+            d = float(sl[:, 1].ptp())
+            area = w * d
+            if area < min_area:
+                min_area = area
+                raw_waist_z = z
+                raw_waist_w = w
+                raw_waist_d = d
+                raw_waist_cy = float((sl[:, 1].min() + sl[:, 1].max()) / 2.0)
+
+    # Bust slice: midway between waist and top
+    raw_bust_z = raw_waist_z + 0.50 * (z_max - raw_waist_z)
+    bust_sl = dpts[np.abs(dpts[:, 2] - raw_bust_z) < 0.02]
+    raw_bust_w = float(bust_sl[:, 0].ptp()) if len(bust_sl) > 0 else raw_waist_w * 1.2
+    raw_bust_d = float(bust_sl[:, 1].ptp()) if len(bust_sl) > 0 else raw_waist_d * 1.3
+    raw_bust_cy = float((bust_sl[:, 1].min() + bust_sl[:, 1].max()) / 2.0) if len(bust_sl) > 0 else raw_waist_cy
+
+    # Hips slice: ~20% below waist towards hem
+    raw_hips_z = raw_waist_z - 0.20 * (raw_waist_z - z_min)
+    hips_sl = dpts[np.abs(dpts[:, 2] - raw_hips_z) < 0.02]
+    raw_hips_w = float(hips_sl[:, 0].ptp()) if len(hips_sl) > 0 else raw_waist_w * 1.4
+    raw_hips_d = float(hips_sl[:, 1].ptp()) if len(hips_sl) > 0 else raw_waist_d * 1.4
+    raw_hips_cy = float((hips_sl[:, 1].min() + hips_sl[:, 1].max()) / 2.0) if len(hips_sl) > 0 else raw_waist_cy
+
+    top_pts = dpts[dpts[:, 2] > z_max - 0.02]
+    raw_top_cy = float((top_pts[:, 1].min() + top_pts[:, 1].max()) / 2.0) if len(top_pts) > 0 else raw_bust_cy
+    top_w = float(top_pts[:, 0].ptp()) if len(top_pts) > 0 else 0.40
+
+    hem_pts = dpts[dpts[:, 2] < z_min + 0.05]
+    raw_hem_cy = float((hem_pts[:, 1].min() + hem_pts[:, 1].max()) / 2.0) if len(hem_pts) > 0 else 0.0
+
+    # 2. Target avatar landmarks
+    body_leg_len = (p_hips.z - p_lfoot.z)
+    ref_leg_len = 0.5452
+    leg_ratio = body_leg_len / ref_leg_len
+    target_waist_z = float(p_spine.z + 0.050 * leg_ratio)
+    target_hips_z = float(p_hips.z + 0.010)
+    target_hem_z = 0.030
+
+    # Top target: off-the-shoulder vs strapless tube
+    is_off_shoulder = top_w > 0.50
+    if is_off_shoulder:
+        target_top_z = float(p_neck.z - 0.012)
+    else:
+        # High bust coverage for tube dress
+        target_top_z = float(p_neck.z + 0.010)
+
+    # 3. Avatar Body Measurements via Regional Scanning
+    waist_pts = bpts[(bpts[:, 2] >= target_waist_z - 0.03) & (bpts[:, 2] <= target_waist_z + 0.03) & (np.abs(bpts[:, 0]) < 0.15)]
+    body_waist_w = float(waist_pts[:, 0].ptp()) if len(waist_pts) > 0 else 0.23
+    body_waist_d = float(waist_pts[:, 1].ptp()) if len(waist_pts) > 0 else 0.18
+    body_waist_cy = float((waist_pts[:, 1].min() + waist_pts[:, 1].max()) / 2.0) if len(waist_pts) > 0 else -0.025
+
+    bust_pts = bpts[(bpts[:, 2] >= 1.05) & (bpts[:, 2] <= 1.22) & (np.abs(bpts[:, 0]) < 0.15)]
+    body_bust_w = float(bust_pts[:, 0].ptp()) if len(bust_pts) > 0 else 0.28
+    body_bust_d = float(bust_pts[:, 1].ptp()) if len(bust_pts) > 0 else 0.25
+    body_bust_cy = float((bust_pts[:, 1].min() + bust_pts[:, 1].max()) / 2.0) if len(bust_pts) > 0 else -0.017
+
+    hips_pts = bpts[(bpts[:, 2] >= target_hips_z - 0.03) & (bpts[:, 2] <= target_hips_z + 0.03)]
+    body_hips_w = float(hips_pts[:, 0].ptp()) if len(hips_pts) > 0 else 0.38
+    body_hips_d = float(hips_pts[:, 1].ptp()) if len(hips_pts) > 0 else 0.28
+    body_hips_cy = float((hips_pts[:, 1].min() + hips_pts[:, 1].max()) / 2.0) if len(hips_pts) > 0 else 0.010
+
+    waist_scale_x = (body_waist_w / raw_waist_w) * 1.12
+    waist_scale_y = (body_waist_d / raw_waist_d) * 1.15
+    bust_scale_x = (body_bust_w / raw_bust_w) * 1.20
+    bust_scale_y = (body_bust_d / raw_bust_d) * 1.25
+
+    # Preserve natural skirt flare / cascading ruffles while guaranteeing anatomical hip clearance.
+    # Skirt must never be crushed below the waist scale when the raw garment has flared tiers or wide ruffles.
+    hips_scale_x = max(waist_scale_x, (body_hips_w / raw_hips_w) * 1.12)
+    hips_scale_y = max(waist_scale_y, (body_hips_d / raw_hips_d) * 1.14)
+
+    raw_bodice_cy = (raw_waist_cy + raw_bust_cy) / 2.0
+
+    print(f"[Blender Binder] Dress alignment: top_z={target_top_z:.3f}, waist_z={target_waist_z:.3f}, hips_z={target_hips_z:.3f}, hem_z={target_hem_z:.3f}")
+
+    # 4. Piecewise vertical deformation
+    for v in dress_mesh.data.vertices:
+        rx, ry, rz = v.co.x, v.co.y, v.co.z
+        if rz >= raw_waist_z:
+            # Bodice zone: waist to top
+            u = (rz - raw_waist_z) / max(1e-4, (z_max - raw_waist_z))
+            u_clamped = min(1.0, max(0.0, u))
+            vz = target_waist_z + u_clamped * (target_top_z - target_waist_z)
+            scale_x = waist_scale_x + u_clamped * (bust_scale_x - waist_scale_x)
+            scale_y = waist_scale_y + u_clamped * (bust_scale_y - waist_scale_y)
+            target_cy = body_waist_cy + u_clamped * (body_bust_cy - body_waist_cy)
+            vx = rx * scale_x
+            vy = target_cy + (ry - raw_bodice_cy) * scale_y
+            # Anterior bust ease: clear chest prominence completely
+            if (ry - raw_bodice_cy) < 0:
+                vy -= 0.022 * math.sin(u_clamped * math.pi)
+        elif rz >= raw_hips_z:
+            # Pelvic rise zone: hips to waist
+            u = (rz - raw_hips_z) / max(1e-4, (raw_waist_z - raw_hips_z))
+            u_clamped = min(1.0, max(0.0, u))
+            vz = target_hips_z + u_clamped * (target_waist_z - target_hips_z)
+            scale_x = hips_scale_x + u_clamped * (waist_scale_x - hips_scale_x)
+            scale_y = hips_scale_y + u_clamped * (waist_scale_y - hips_scale_y)
+            raw_cy = raw_hips_cy + u_clamped * (raw_bodice_cy - raw_hips_cy)
+            target_cy = body_hips_cy + u_clamped * (body_waist_cy - body_hips_cy)
+            vx = rx * scale_x
+            vy = target_cy + (ry - raw_cy) * scale_y
+            # Anterior abdomen ease: envelope lower tummy
+            if (ry - raw_cy) < 0:
+                vy -= 0.015 * math.sin(u_clamped * math.pi)
+        else:
+            # Skirt zone: hem to hips
+            u = (rz - z_min) / max(1e-4, (raw_hips_z - z_min))
+            u_clamped = min(1.0, max(0.0, u))
+            vz = target_hem_z + u_clamped * (target_hips_z - target_hem_z)
+            scale_x = hips_scale_x
+            scale_y = hips_scale_y
+            raw_cy = raw_hem_cy + u_clamped * (raw_hips_cy - raw_hem_cy)
+            target_cy = 0.0 + u_clamped * (body_hips_cy - 0.0)
+            vx = rx * scale_x
+            vy = target_cy + (ry - raw_cy) * scale_y
+
+        v.co.x = vx
+        v.co.y = vy
+        v.co.z = vz
+
+    dress_mesh.data.update()
+
+
+def bind_and_skin_dress_garment(dress_mesh, body_mesh, armature, root_empty=None):
+    """
+    Skin full-length dress to armature via clean body vertex weight transfer and sanitization:
+    - Transfers weights using DATA_TRANSFER (POLYINTERP_NEAREST).
+    - Bodice sanitization: reassigns arm, shoulder, head, and neck weights to Spine2, keeping bodice rigid and stable under upper-limb/head articulation.
+    - Skirt sanitization: reassigns foot/toe weights to same-side UpLeg, and blends shin/leg weights 70% to UpLeg and 30% to Hips, preventing cross-leg tearing/stretching during dynamic motion.
+    """
+    # 1. Transfer weights from clean body
+    mod_dt = dress_mesh.modifiers.new(name="DataTransfer", type="DATA_TRANSFER")
+    mod_dt.object = body_mesh
+    mod_dt.use_vert_data = True
+    mod_dt.data_types_verts = {'VGROUP_WEIGHTS'}
+    mod_dt.vert_mapping = 'POLYINTERP_NEAREST'
+    mod_dt.ray_radius = 0.50
+
+    bpy.context.view_layer.objects.active = dress_mesh
+    dress_mesh.select_set(True)
+    bpy.ops.object.datalayout_transfer(modifier=mod_dt.name)
+    bpy.ops.object.modifier_apply(modifier=mod_dt.name)
+
+    # 2. Weight Sanitization
+    spine2_vg = dress_mesh.vertex_groups.get("mixamorig_Spine2") or dress_mesh.vertex_groups.get("Spine2")
+    if not spine2_vg:
+        spine2_vg = dress_mesh.vertex_groups.new(name="mixamorig_Spine2")
+
+    upper_pruned = 0
+    for vg in list(dress_mesh.vertex_groups):
+        vg_name = vg.name
+        if any(k in vg_name for k in ["Head", "Neck", "Shoulder", "Arm", "Hand"]):
+            vg_idx = vg.index
+            for v in dress_mesh.data.vertices:
+                for g in v.groups:
+                    if g.group == vg_idx and g.weight > 0:
+                        spine2_vg.add([v.index], g.weight, "ADD")
+            dress_mesh.vertex_groups.remove(vg)
+            upper_pruned += 1
+
+    hips_vg = dress_mesh.vertex_groups.get("mixamorig_Hips") or dress_mesh.vertex_groups.get("Hips")
+    l_upleg_vg = dress_mesh.vertex_groups.get("mixamorig_LeftUpLeg") or dress_mesh.vertex_groups.get("LeftUpLeg")
+    r_upleg_vg = dress_mesh.vertex_groups.get("mixamorig_RightUpLeg") or dress_mesh.vertex_groups.get("RightUpLeg")
+
+    lower_pruned = 0
+    for vg in list(dress_mesh.vertex_groups):
+        vg_name = vg.name
+        if any(k in vg_name for k in ["Foot", "ToeBase"]):
+            vg_idx = vg.index
+            for v in dress_mesh.data.vertices:
+                for g in v.groups:
+                    if g.group == vg_idx and g.weight > 0:
+                        target_vg = l_upleg_vg if v.co.x >= 0 else r_upleg_vg
+                        if target_vg:
+                            target_vg.add([v.index], g.weight, "ADD")
+            dress_mesh.vertex_groups.remove(vg)
+            lower_pruned += 1
+        elif "Leg" in vg_name and "UpLeg" not in vg_name:
+            vg_idx = vg.index
+            for v in dress_mesh.data.vertices:
+                for g in v.groups:
+                    if g.group == vg_idx and g.weight > 0:
+                        target_vg = l_upleg_vg if v.co.x >= 0 else r_upleg_vg
+                        if target_vg:
+                            target_vg.add([v.index], g.weight * 0.7, "ADD")
+                        if hips_vg:
+                            hips_vg.add([v.index], g.weight * 0.3, "ADD")
+            dress_mesh.vertex_groups.remove(vg)
+            lower_pruned += 1
+
+    print(f"[Blender Binder] Dress weight sanitization: pruned {upper_pruned} upper-body and {lower_pruned} lower-leg vertex groups. Retained {len(dress_mesh.vertex_groups)} groups.")
+
+    # 3. Parenting and Armature Modifier
+    if root_empty:
+        dress_mesh.parent = root_empty
+        dress_mesh.matrix_parent_inverse = root_empty.matrix_world.inverted()
+    else:
+        dress_mesh.parent = armature
+        dress_mesh.matrix_parent_inverse = armature.matrix_world.inverted()
+
+    mod_arm = dress_mesh.modifiers.new(name="Armature", type="ARMATURE")
+    mod_arm.object = armature
+    print(f"[Blender Binder] Rigged dress '{dress_mesh.name}' with {len(dress_mesh.vertex_groups)} vertex groups.")
+
+
 def update_material_texture(mesh_obj, mat_name, tex_path):
-    """Ensure the mesh object's material uses the specified texture image."""
+    """Ensure the mesh object's material uses the specified texture image and links to Base Color."""
     if not mesh_obj or not mesh_obj.data.materials:
         return
 
@@ -610,12 +859,24 @@ def update_material_texture(mesh_obj, mat_name, tex_path):
     if not mat.use_nodes:
         mat.use_nodes = True
 
+    tex_node = None
+    bsdf_node = None
+    for node in mat.node_tree.nodes:
+        if node.type == "TEX_IMAGE":
+            tex_node = node
+        elif node.type == "BSDF_PRINCIPLED":
+            bsdf_node = node
+
     if tex_path and os.path.exists(tex_path):
         img = bpy.data.images.load(tex_path)
         img.name = os.path.basename(tex_path)
-        for node in mat.node_tree.nodes:
-            if node.type == "TEX_IMAGE":
-                node.image = img
+        if tex_node:
+            tex_node.image = img
+
+    if bsdf_node and tex_node:
+        mat.node_tree.links.new(tex_node.outputs["Color"], bsdf_node.inputs["Base Color"])
+        if bsdf_node.inputs.get("Emission Strength"):
+            bsdf_node.inputs["Emission Strength"].default_value = 0.0
 
 
 def setup_lighting_and_world():
@@ -635,6 +896,7 @@ def main():
     hair_usdz = config.get("hair")
     upper_usdz = config.get("upper")
     lower_usdz = config.get("lower")
+    dress_usdz = config.get("dress")
     output_usdz = config["output_usdz"]
     output_anim_usdz = config.get("output_anim_usdz")
     preview_image_path = config.get("preview_image_path")
@@ -648,6 +910,7 @@ def main():
     hair_extract_dir = os.path.join(temp_root, "hair_unpacked") if hair_usdz else None
     upper_extract_dir = os.path.join(temp_root, "upper_unpacked") if upper_usdz else None
     lower_extract_dir = os.path.join(temp_root, "lower_unpacked") if lower_usdz else None
+    dress_extract_dir = os.path.join(temp_root, "dress_unpacked") if dress_usdz else None
 
     try:
         print("[Blender Binder] Unpacking USDZ archives...")
@@ -672,6 +935,12 @@ def main():
             safe_extract_usdz(lower_usdz, lower_extract_dir)
             lower_tex = isolate_part_texture(lower_extract_dir, "lower")
             print(f"[Blender Binder] Lower garment texture: {lower_tex}")
+
+        dress_tex = None
+        if dress_usdz:
+            safe_extract_usdz(dress_usdz, dress_extract_dir)
+            dress_tex = isolate_part_texture(dress_extract_dir, "dress")
+            print(f"[Blender Binder] Dress texture: {dress_tex}")
 
         # Reset Blender scene
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -964,6 +1233,32 @@ def main():
             # Rig and skin to armature via clean body vertex weight transfer
             bind_and_skin_lower_garment(lower_mesh, body_mesh, armature, root_empty)
             bound_parts["lower"] = lower_mesh
+
+        # 5. Import & Bind Dress USDZ (if provided)
+        if dress_usdz:
+            existing_objs = set(bpy.context.scene.objects)
+            print(f"[Blender Binder] Importing dress USDZ: {dress_usdz}")
+            bpy.ops.wm.usd_import(filepath=dress_usdz)
+
+            new_objs = [o for o in bpy.context.scene.objects if o not in existing_objs]
+            dress_mesh = None
+            for o in new_objs:
+                if o.type == "MESH":
+                    dress_mesh = o
+                elif o.type == "EMPTY" and o.name.startswith("_materials"):
+                    bpy.data.objects.remove(o)
+
+            if not dress_mesh:
+                raise RuntimeError("Failed to locate dress mesh in imported USDZ.")
+
+            update_material_texture(dress_mesh, "Dress_Material", dress_tex)
+
+            # Align dress against clean body landmarks
+            align_dress_garment(dress_mesh, body_mesh, armature)
+
+            # Rig and skin to armature via clean body vertex weight transfer
+            bind_and_skin_dress_garment(dress_mesh, body_mesh, armature, root_empty)
+            bound_parts["dress"] = dress_mesh
 
         # 8. Export Bound USDZ
         print(f"[Blender Binder] Exporting USDZ to {output_usdz}...")

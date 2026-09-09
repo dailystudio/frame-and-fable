@@ -134,6 +134,28 @@ When adapting canonical garments (upper or lower) to an avatar, you must disting
      2. Lower legs ($Z < Z_{\text{crotch}} - 0.05\text{m}$): strip all `mixamorig_Hips` weights completely and transfer them to the leg bone (`LeftLeg`/`RightLeg`), ensuring 100% leg articulation independence.
      3. Center crotch apex ($|X| \le 5\text{mm}$ and $Z \ge Z_{\text{crotch}} - 0.02\text{m}$): reassign leg weights to `mixamorig_Hips` to maintain seamless groin curvature.
 
+#### Full-Length Dress Alignment & Skirt Articulation
+1. **Piecewise Tri-Zone Vertical Mapping**:
+   - Dresses span three anatomical zones: the **bodice** ($rz \ge \text{raw\_waist\_z}$), the **pelvic rise** ($rz \in [\text{raw\_hips\_z}, \text{raw\_waist\_z}]$), and the **skirt** ($rz < \text{raw\_hips\_z}$).
+   - **Top Rim Target Calibration**:
+     - For strapless tube gowns (top rim width $\le 0.50\text{m}$), target high bust neck base (`target_top_z = p_neck.z + 0.010m`), ensuring sweetheart dips cover the full bust without poke-through while side peaks cover the axilla.
+     - For off-the-shoulder gowns with shoulder bands (top rim width $> 0.50\text{m}$), target shoulder collar height (`target_top_z = p_neck.z - 0.012m`).
+   - `target_waist_z = p_spine.z + 0.050 * leg_ratio`, `target_hips_z = p_hips.z + 0.010m`, and `target_hem_z = 0.030m` (skimming floor without footwear clipping).
+2. **Proportional Skirt Flare & Ruffle Preservation**:
+   - Unlike tight pants or pencil skirts, dresses feature flared, tiered, or cascading ruffles (e.g. `woman_tube.usdz` with 1.9m wide side ruffles).
+   - Never collapse the skirt based purely on hip bounding width (`body_hips_w / raw_hips_w`), which would crush the skirt to less than half its width and squash side ruffles into the crotch.
+   - Anchor the skirt scale to the character waist scale, while guaranteeing anatomical clearance for the pelvis:
+     $$\text{hips\_scale\_x} = \max\left(\text{waist\_scale\_x}, \frac{\text{body\_hips\_w}}{\text{raw\_hips\_w}} \cdot 1.12\right)$$
+     $$\text{hips\_scale\_y} = \max\left(\text{waist\_scale\_y}, \frac{\text{body\_hips\_d}}{\text{raw\_hips\_d}} \cdot 1.14\right)$$
+   - This ensures the cascading ruffles on both sides along the legs retain their natural silhouette and spread without poke-through or clipping.
+3. **Anterior Bust & Abdomen Ease**:
+   - Bodice center Y tracks the spine line (`body_waist_cy` to `body_bust_cy`), decoupled from top rim asymmetric cutout dips.
+   - Smooth sinusoidal anterior bust ease ($\Delta Y = -0.022 \cdot \sin(u \pi)$) guarantees zero chest poke-through across full volume.
+   - Sinusoidal anterior abdomen ease ($\Delta Y = -0.015 \cdot \sin(u \pi)$) along the pelvic rise envelopes the lower abdomen and navel seamlessly.
+4. **Dual-Zone Weight Cleansing (Zero Tearing & Zero Stretching)**:
+   - **Bodice Sanitization**: All head, neck, shoulder, arm, and hand weights are transferred to `mixamorig_Spine2`. Dynamic head turns (Phase 2) and waving/dancing motions leave the strapless bodice perfectly rigid and stable.
+   - **Skirt Sanitization**: Foot and toe weights are transferred to same-side `UpLeg`. Shin/leg weights are blended 70% to same-side `UpLeg` and 30% to `mixamorig_Hips`. This allows the skirt to swing gracefully with thigh movement without tearing across knees or sticking between the legs.
+
 ---
 
 ## 3. Principles for Adding a New Binding Part
@@ -202,6 +224,24 @@ python human-composer.py bind \
   --intermediate \
   --preview \
   --output-dir outputs/test_man_full_ensemble
+
+# Female Avatar (Strapless Tiered Tube Dress)
+python human-composer.py bind \
+  --body tests/woman_anim_base.usdz \
+  --hair tests/woman_hair.usdz \
+  --dress tests/woman_tube.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_woman_tube
+
+# Female Avatar (Off-the-Shoulder Slit Evening Gown)
+python human-composer.py bind \
+  --body tests/woman_anim_base.usdz \
+  --hair tests/woman_hair.usdz \
+  --dress tests/women_tube_2.usdz \
+  --intermediate \
+  --preview \
+  --output-dir outputs/test_woman_tube2
 ```
 
 ### 2. Required Inspection Angles (Check All 5!)
@@ -228,6 +268,7 @@ is_skin = (arr[:, :, 0] > 200) & (arr[:, :, 0] - arr[:, :, 1] > 20) & (arr[:, :,
 ### 4. Dynamic Animation & Stress Testing
 Verify weight transfer under dynamic joint articulation:
 ```bash
+# Male Articulation (Hip Hop Dancing)
 python human-composer.py bind \
   --body tests/man_anim_base.usdz \
   --hair tests/man_hair.usdz \
@@ -235,6 +276,15 @@ python human-composer.py bind \
   --anim tests/anim_hip_hop.usda \
   --preview-anim \
   --output-dir outputs/test_anim
+
+# Female Articulation (Standing Greeting)
+python human-composer.py bind \
+  --body tests/woman_anim_base.usdz \
+  --hair tests/woman_hair.usdz \
+  --dress tests/woman_tube.usdz \
+  --anim tests/woman_anim_standing_greeting.usdc \
+  --preview-anim \
+  --output-dir outputs/test_woman_tube_anim_greeting
 ```
 Inspect `preview_animation.mp4`:
 - **Phase 1 (Frames 1–48, Turntable)**: 360° rotation; verify full coverage from every angle.
@@ -260,3 +310,15 @@ Inspect `preview_animation.mp4`:
    - Always extract to separate isolated folders and rename before importing to Blender.
 5. **Preserve Untouched Subsystems**:
    - When modifying clothing or adding new parts, keep hair binding algorithms strictly untouched. Verify hair fit on both male and female models after any pipeline change.
+6. **Bodice Centerline Stability & Sweetheart Necklines**:
+   - On dresses with asymmetric top rims (sweetheart dips, scooped backs), the highest vertices only exist in the front cups. Sampling the top rim center shifts $Y$ far anteriorly, erroneously pushing the mid-bodice into the chest.
+   - Decouple the bodice center axis from top cutouts by anchoring on `(raw_waist_cy + raw_bust_cy) / 2.0`.
+7. **USDZ Texture Mapping (Emission vs Base Color)**:
+   - Several USDZ models export textures mapped solely to `Principled BSDF` Emission Color with a default white Base Color, producing washed-out surfaces.
+   - Always link `TEX_IMAGE` Color to `Base Color` and reset `Emission Strength` to 0.0.
+8. **Armature Parent Inverse Matrix**:
+   - Parenting imported meshes to an armature without setting `mesh.matrix_parent_inverse = armature.matrix_world.inverted()` will apply the armature's unit scale (e.g. 0.01x) and collapse the garment into a tiny speck. Always set `matrix_parent_inverse`.
+9. **Flared & Ruffled Skirt Proportional Scaling**:
+   - When binding dresses with flared tiers or side ruffles, bounding box sampling at the hip level (`raw_hips_w`) captures the outer ruffle span rather than the inner body cylinder.
+   - If `hips_scale_x` is computed simply as `body_hips_w / raw_hips_w`, the skirt collapses to less than half its designed width, crushing side ruffles inward against the legs and causing avatar thighs to poke out laterally.
+   - Always clamp skirt scaling with `max(waist_scale_x, ...)` and `max(waist_scale_y, ...)`.
