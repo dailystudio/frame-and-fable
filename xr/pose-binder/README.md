@@ -116,8 +116,54 @@ options:
 
 ---
 
+## 🛠️ Utility: Chin & Jaw Weight Fixer (`fix_chin_jaw_weights.py`)
+
+When characters are auto-rigged using Mixamo, a very common artifact is the **"rubber chin / stretched jaw"**:
+- In the bind pose, the chin and jawline are spatially close to the upper chest (`mixamorig_Spine2`) and shoulders.
+- Heat-diffusion / automatic skinning bleeds chest and shoulder weights into the chin and throat (often 10%–85%).
+- When animations play, `Head` rotates and lifts while `Spine2` stays with the torso, pulling the chin in opposing directions and stretching it like chewing gum.
+- Additionally, files exported with $>4$ bone influences per vertex (`elementSize > 4`) cause vertex distortion on runtimes like **Apple RealityKit**, **visionOS**, and **ARKit QuickLook**.
+
+[`fix_chin_jaw_weights.py`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/fix_chin_jaw_weights.py) is a standalone, universal tool designed to cleanly eliminate this issue.
+
+### ✨ Key Capabilities
+
+1. **Universal & Scale-Independent**: Uses 3D joint reference positions (`bindTransforms`) and skeletal topology rather than hardcoded coordinates. Works on characters of any height, scale, or orientation.
+2. **Topological Weight Reallocation**: Detects head/jawline vertices and strips all torso (`Spine`, `Chest`), shoulder, and arm influences, reallocating those weights directly to the `Head` bone.
+3. **RealityKit / GPU Standard**: Clamps maximum bone influences to 4 per vertex (`elementSize = 4`) and normalizes all weights to strictly sum to `1.0`.
+4. **USDZ & USDC Support**: Unpacks `.usdz` packages, fixes the underlying geometry, preserves all embedded textures and materials, and re-packages an ARKit-compliant `.usdz` (or directly edits `.usdc` files).
+5. **Zero-Setup Execution**: Automatically detects and re-launches through Blender's bundled `pxr` USD environment if standard system Python lacks the Pixar USD library.
+
+### 💻 Usage Examples
+
+```bash
+# 1. Clean a model and save to a new file:
+python3 fix_chin_jaw_weights.py outputs/ken_anim_base.usdz -o outputs/ken_anim_base_clean.usdz
+
+# 2. Clean a file in-place (automatically creates a _backup file first):
+python3 fix_chin_jaw_weights.py outputs/ken_anim_base.usdz --in-place
+
+# 3. Batch-clean multiple USDZ / USDC files:
+python3 fix_chin_jaw_weights.py outputs/model1_base.usdz outputs/model2_base.usdz
+```
+
+#### Options Reference
+
+```text
+positional arguments:
+  inputs                Path(s) to .usdz or .usdc files to clean.
+
+options:
+  -h, --help            Show help message and exit.
+  -o, --output OUTPUT   Output file path (single file mode only).
+  --in-place            Overwrite input file in place (preserves a *_backup copy).
+```
+
+---
+
 ## 📜 License
 
 The pipeline automation script is open and can be integrated into proprietary or commercial projects. See [`ARCHITECTURE.md`](file:///Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/ARCHITECTURE.md) for licensing and architectural details.
+
 
 
