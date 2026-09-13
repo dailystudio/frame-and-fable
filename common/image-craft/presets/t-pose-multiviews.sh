@@ -1,17 +1,41 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: t-pose-multiviews.sh
-# Description: Wrapper around model-multiviews.sh that generates Left, Right,
-#              and Back views of a model in T-POSE from a front reference image.
+# Description: Generates multi-view images of a model in T-POSE from any reference
+#              image (not required to be a front view).
+#              Phase 1: Generates canonical front view in standard T-pose.
+#              Phase 2: Uses that front view to generate the remaining views
+#                       (Left, Right, Back by default).
 # ==============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 MULTIVIEW_SCRIPT="${SCRIPT_DIR}/model-multiviews.sh"
+GEMINI_SCRIPT="${PROJECT_ROOT}/gemini-image.py"
 
 if [[ ! -f "${MULTIVIEW_SCRIPT}" ]]; then
     echo "Error: model-multiviews.sh not found at ${MULTIVIEW_SCRIPT}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${GEMINI_SCRIPT}" ]]; then
+    echo "Error: gemini-image.py not found at ${GEMINI_SCRIPT}" >&2
+    exit 1
+fi
+
+# Resolve python interpreter
+if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+else
+    echo "Error: Python interpreter not found." >&2
     exit 1
 fi
 
@@ -22,34 +46,51 @@ Usage:
   $(basename "$0") -i <REF_IMAGE> [-p EXTRA_PROMPT] [OPTIONS...]
 
 Description:
-  Generates multi-view (Left, Right, Back) images of a model in T-POSE.
-  Wraps model-multiviews.sh and automatically appends "T-POSE" to the prompt.
+  Generates multi-view (Front, Left, Right, Back) images of a model in T-POSE.
+  Accepts any reference image of the model (does not need to be a front view).
+
+  Two-phase generation workflow:
+    Phase 1: Generates the front view of the model in standard T-pose using
+             the reference image and constrained prompting.
+    Phase 2: Uses the generated front view as the canonical reference to
+             generate the remaining views (Left, Right, Back by default).
 
 Arguments:
-  REF_IMAGE       Path to front reference image of the model
-  EXTRA_PROMPT    Optional extra prompt appended alongside "T-POSE"
+  REF_IMAGE       Path to reference image of the model (any pose or angle)
+  EXTRA_PROMPT    Optional extra prompt appended to generation prompts
 
 Options:
-  -i, --image IMAGE_PATH        Path to front reference image
-  -p, --extra-prompt PROMPT     Additional prompt to append (e.g. "clay style")
-  -v, --views VIEWS             Override views (default: "left; right; back")
+  -i, --image IMAGE_PATH        Path to reference image
+  -p, --prompt, --extra-prompt PROMPT
+                                Additional prompt to append (e.g. "clay style")
+  -v, --views VIEWS             Override remaining views (default: "left; right; back")
+  --front-prompt PROMPT         Override prompt used for Phase 1 front view generation
+  --skip-front-gen, --is-front-view
+                                Skip Phase 1 (if input image is already a front T-pose view)
   -r, -a, --ratio RATIO         Aspect ratio for generated views (default: 1:1)
   -s, --size SIZE               Resolution for generated views (default: 4K)
+  -o, --output OUTPUT           Output directory (e.g. outputs/) or file stem (e.g. outputs/char.png)
   -h, --help                    Show this help message
   ...                           Any other flags are forwarded to gemini-image.py
-                                (e.g. --transparent, -m 3.1-flash, -o outputs/)
+                                (e.g. --transparent, -m 3.1-flash)
 
 Examples:
-  $(basename "$0") character_front.png
-  $(basename "$0") character_front.png "keep white background, clay style"
-  $(basename "$0") -i character_front.png -p "3D render, clay style" --transparent
-  $(basename "$0") -i character_front.png -r 16:9 -s 2K
+  $(basename "$0") character.png
+  $(basename "$0") character.png "keep white background, clay style"
+  $(basename "$0") -i character.png -p "3D render, clay style" --transparent
+  $(basename "$0") -i character.png -o outputs/character.png
+  $(basename "$0") -i character.png -r 16:9 -s 2K
 EOF
 }
 
 REF_IMAGE=""
 EXTRA_PROMPT=""
 VIEWS=""
+ASPECT_RATIO="1:1"
+IMAGE_SIZE="4K"
+OUTPUT_TARGET=""
+FRONT_PROMPT_OVERRIDE=""
+SKIP_FRONT_GEN=false
 EXTRA_ARGS=()
 
 # Parse command-line arguments
@@ -95,16 +136,32 @@ while [[ $# -gt 0 ]]; do
             EXTRA_PROMPT="${1#*=}"
             shift
             ;;
+        --front-prompt)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires a prompt string." >&2
+                exit 1
+            fi
+            FRONT_PROMPT_OVERRIDE="$2"
+            shift 2
+            ;;
+        --front-prompt=*)
+            FRONT_PROMPT_OVERRIDE="${1#*=}"
+            shift
+            ;;
+        --skip-front-gen|--is-front-view)
+            SKIP_FRONT_GEN=true
+            shift
+            ;;
         -r|-a|--ratio|--aspect-ratio)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires an aspect ratio." >&2
                 exit 1
             fi
-            EXTRA_ARGS+=("$1" "$2")
+            ASPECT_RATIO="$2"
             shift 2
             ;;
         -r=*|-a=*|--ratio=*|--aspect-ratio=*)
-            EXTRA_ARGS+=("$1")
+            ASPECT_RATIO="${1#*=}"
             shift
             ;;
         -s|--size|--resolution)
@@ -112,14 +169,26 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: $1 requires a size/resolution." >&2
                 exit 1
             fi
-            EXTRA_ARGS+=("$1" "$2")
+            IMAGE_SIZE="$2"
             shift 2
             ;;
         -s=*|--size=*|--resolution=*)
-            EXTRA_ARGS+=("$1")
+            IMAGE_SIZE="${1#*=}"
             shift
             ;;
-        -m|--model|-o|--output|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
+        -o|--output)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an output path." >&2
+                exit 1
+            fi
+            OUTPUT_TARGET="$2"
+            shift 2
+            ;;
+        -o=*|--output=*)
+            OUTPUT_TARGET="${1#*=}"
+            shift
+            ;;
+        -m|--model|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires an argument." >&2
                 exit 1
@@ -127,7 +196,7 @@ while [[ $# -gt 0 ]]; do
             EXTRA_ARGS+=("$1" "$2")
             shift 2
             ;;
-        -m=*|--model=*|-o=*|--output=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
+        -m=*|--model=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
             EXTRA_ARGS+=("$1")
             shift
             ;;
@@ -175,21 +244,188 @@ if [[ -z "${REF_IMAGE}" ]]; then
     exit 1
 fi
 
-# Combine "T-POSE" with any additional prompt
+if [[ ! -f "${REF_IMAGE}" ]]; then
+    echo "Error: Reference image not found: ${REF_IMAGE}" >&2
+    exit 1
+fi
+
+# Resolve reference image to absolute path
+REF_IMAGE="$(cd "$(dirname "${REF_IMAGE}")" && pwd)/$(basename "${REF_IMAGE}")"
+
+# ------------------------------------------------------------------------------
+# Phase 1: Generate Front View in T-POSE (if not skipped)
+# ------------------------------------------------------------------------------
+GENERATED_FRONT_IMAGE=""
+
+if [[ "${SKIP_FRONT_GEN}" == true ]]; then
+    echo "================================================================"
+    echo " Skipping Phase 1: Using provided reference image directly as front view."
+    echo " Reference Image: ${REF_IMAGE}"
+    echo "================================================================"
+    echo ""
+    GENERATED_FRONT_IMAGE="${REF_IMAGE}"
+else
+    # Build front view prompt with strict constraints
+    BASE_PROMPT="Create a front-view T-pose of this character. ${EXTRA_PROMPT}"
+    FRONT_VIEW_PROMPT="${FRONT_PROMPT_OVERRIDE:-$BASE_PROMPT}"
+
+    # Determine Phase 1 output path argument
+    PHASE1_OUT_ARGS=()
+    EXPLICIT_FRONT_FILE=""
+    if [[ -n "${OUTPUT_TARGET}" ]]; then
+        if [[ "${OUTPUT_TARGET}" == */ || -d "${OUTPUT_TARGET}" ]]; then
+            mkdir -p "${OUTPUT_TARGET}"
+            PHASE1_OUT_ARGS+=("-o" "${OUTPUT_TARGET}")
+        else
+            target_dir="$(dirname "${OUTPUT_TARGET}")"
+            target_filename="$(basename "${OUTPUT_TARGET}")"
+            mkdir -p "${target_dir}"
+            if [[ "${target_filename}" =~ \. ]]; then
+                target_stem="${target_filename%.*}"
+                target_ext=".${target_filename##*.}"
+            else
+                target_stem="${target_filename}"
+                target_ext=""
+            fi
+            EXPLICIT_FRONT_FILE="${target_dir}/${target_stem}_front${target_ext}"
+            PHASE1_OUT_ARGS+=("-o" "${EXPLICIT_FRONT_FILE}")
+        fi
+    fi
+
+    echo "================================================================"
+    echo " Phase 1: Generating Front View (T-POSE)"
+    echo " Reference Image : ${REF_IMAGE}"
+    echo " Aspect Ratio    : ${ASPECT_RATIO}"
+    echo " Resolution      : ${IMAGE_SIZE}"
+    if [[ -n "${EXPLICIT_FRONT_FILE}" ]]; then
+        echo " Output Target   : ${EXPLICIT_FRONT_FILE}"
+    elif [[ -n "${OUTPUT_TARGET}" ]]; then
+        echo " Output Target   : ${OUTPUT_TARGET}"
+    fi
+    echo " Prompt          : \"${FRONT_VIEW_PROMPT}\""
+    echo "================================================================"
+    echo ""
+
+    TMP_LOG="$(mktemp)"
+    set +e
+    "${PYTHON_BIN}" "${GEMINI_SCRIPT}" \
+        "${FRONT_VIEW_PROMPT}" \
+        -i "${REF_IMAGE}" \
+        -r "${ASPECT_RATIO}" \
+        -s "${IMAGE_SIZE}" \
+        ${PHASE1_OUT_ARGS[@]+"${PHASE1_OUT_ARGS[@]}"} \
+        ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} 2>&1 | tee "${TMP_LOG}"
+    GEN_STATUS="${PIPESTATUS[0]}"
+    set -e
+
+    if [[ ${GEN_STATUS} -ne 0 ]]; then
+        echo "" >&2
+        echo "Error: Failed to generate front view in T-pose (exit code: ${GEN_STATUS})." >&2
+        rm -f "${TMP_LOG}"
+        exit "${GEN_STATUS}"
+    fi
+
+    # Extract saved image path from output
+    GENERATED_FRONT_IMAGE="$(grep -E "Successfully saved generated image" "${TMP_LOG}" | tail -n 1 | sed -E 's/.*Successfully saved generated image (to |\([0-9]+\/[0-9]+\) to )//')"
+    rm -f "${TMP_LOG}"
+
+    if [[ -z "${GENERATED_FRONT_IMAGE}" && -n "${EXPLICIT_FRONT_FILE}" && -f "${EXPLICIT_FRONT_FILE}" ]]; then
+        GENERATED_FRONT_IMAGE="${EXPLICIT_FRONT_FILE}"
+    fi
+
+    if [[ -z "${GENERATED_FRONT_IMAGE}" || ! -f "${GENERATED_FRONT_IMAGE}" ]]; then
+        echo "" >&2
+        echo "Error: Could not locate generated front view image at '${GENERATED_FRONT_IMAGE}'." >&2
+        exit 1
+    fi
+
+    # Resolve generated front image to absolute path
+    GENERATED_FRONT_IMAGE="$(cd "$(dirname "${GENERATED_FRONT_IMAGE}")" && pwd)/$(basename "${GENERATED_FRONT_IMAGE}")"
+
+    echo ""
+    echo "----------------------------------------------------------------"
+    echo " Front View generated: ${GENERATED_FRONT_IMAGE}"
+    echo "----------------------------------------------------------------"
+    echo ""
+fi
+
+# ------------------------------------------------------------------------------
+# Phase 2: Generate Remaining Views using Front View as reference
+# ------------------------------------------------------------------------------
+REMAINING_VIEWS=""
+if [[ -n "${VIEWS}" ]]; then
+    IFS=";" read -ra RAW_TOKENS <<< "${VIEWS}"
+    if [[ ${#RAW_TOKENS[@]} -le 1 && "${VIEWS}" =~ , ]]; then
+        IFS="," read -ra RAW_TOKENS <<< "${VIEWS}"
+    fi
+
+    KEPT_TOKENS=()
+    for raw in "${RAW_TOKENS[@]}"; do
+        token="$(echo -n "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+        [[ -z "$token" ]] && continue
+        lower_token="$(echo "$token" | tr '[:upper:]' '[:lower:]')"
+        # If Phase 1 generated front view, avoid re-generating front view
+        if [[ "${SKIP_FRONT_GEN}" == false ]]; then
+            if [[ "$lower_token" == "front" || "$lower_token" == "front view" || "$lower_token" == "front_view" || "$lower_token" == *"generate model"*"front view"* ]]; then
+                continue
+            fi
+        fi
+        KEPT_TOKENS+=("$token")
+    done
+
+    if [[ ${#KEPT_TOKENS[@]} -gt 0 ]]; then
+        REMAINING_VIEWS=""
+        for k in "${KEPT_TOKENS[@]}"; do
+            if [[ -z "${REMAINING_VIEWS}" ]]; then
+                REMAINING_VIEWS="${k}"
+            else
+                REMAINING_VIEWS="${REMAINING_VIEWS}; ${k}"
+            fi
+        done
+    else
+        REMAINING_VIEWS="__NONE__"
+    fi
+fi
+
+if [[ "${REMAINING_VIEWS}" == "__NONE__" ]]; then
+    echo "================================================================"
+    echo " No remaining views to generate. Front view complete."
+    echo " Front View: ${GENERATED_FRONT_IMAGE}"
+    echo "================================================================"
+    exit 0
+fi
+
+# Combine "T-POSE" with any additional prompt for remaining views
 if [[ -n "${EXTRA_PROMPT}" ]]; then
     COMBINED_PROMPT="T-POSE, ${EXTRA_PROMPT}"
 else
     COMBINED_PROMPT="T-POSE"
 fi
 
-EXTRA_PASS_ARGS=()
-if [[ -n "${VIEWS}" ]]; then
-    EXTRA_PASS_ARGS+=("-v" "${VIEWS}")
+PHASE2_ARGS=()
+if [[ -n "${REMAINING_VIEWS}" ]]; then
+    PHASE2_ARGS+=("-v" "${REMAINING_VIEWS}")
+fi
+if [[ -n "${OUTPUT_TARGET}" ]]; then
+    PHASE2_ARGS+=("-o" "${OUTPUT_TARGET}")
 fi
 
-# Invoke model-multiviews.sh
+echo "================================================================"
+echo " Phase 2: Generating Remaining Views using Front View"
+echo " Canonical Front Reference : ${GENERATED_FRONT_IMAGE}"
+if [[ -n "${REMAINING_VIEWS}" ]]; then
+    echo " Views to Generate         : ${REMAINING_VIEWS}"
+else
+    echo " Views to Generate         : left; right; back (default)"
+fi
+echo "================================================================"
+echo ""
+
+# Invoke model-multiviews.sh with generated front view as reference
 exec "${MULTIVIEW_SCRIPT}" \
-    -i "${REF_IMAGE}" \
+    -i "${GENERATED_FRONT_IMAGE}" \
     -p "${COMBINED_PROMPT}" \
-    ${EXTRA_PASS_ARGS[@]+"${EXTRA_PASS_ARGS[@]}"} \
+    -r "${ASPECT_RATIO}" \
+    -s "${IMAGE_SIZE}" \
+    ${PHASE2_ARGS[@]+"${PHASE2_ARGS[@]}"} \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}

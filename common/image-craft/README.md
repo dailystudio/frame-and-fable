@@ -106,14 +106,20 @@ Generate multi-view images from a front reference image (1:1 ratio, 4K resolutio
 ./presets/model-multiviews.sh -i character_front.png -p "3D render" --transparent
 ```
 
-#### T-POSE Multi-Views Wrapper (`t-pose-multiviews.sh`)
-Wraps `model-multiviews.sh` and automatically includes `"T-POSE"` in the prompt:
-```bash
-# Basic usage (generates Left, Right, and Back views in T-POSE)
-./presets/t-pose-multiviews.sh character_front.png
+#### T-POSE Multi-Views (`t-pose-multiviews.sh`)
+Generates full multi-view images (Front, Left, Right, Back) in T-POSE from **any** reference image (side view, angle, dynamic pose):
+- **Phase 1**: Generates a canonical front view in standard T-pose with constrained prompting to enforce strict posture, framing, and identity preservation.
+- **Phase 2**: Uses the generated front view as the reference to generate the remaining views (Left, Right, Back).
 
-# With extra styling prompt (combined as "T-POSE, keep white background")
-./presets/t-pose-multiviews.sh character_front.png "keep white background, clay style"
+```bash
+# Basic usage (accepts any character image, generates Front, Left, Right, and Back views in T-POSE)
+./presets/t-pose-multiviews.sh character.png
+
+# With extra styling prompt
+./presets/t-pose-multiviews.sh character.png "keep white background, clay style"
+
+# Specify output file stem (produces character_front.png, character_left.png, character_right.png, character_back.png)
+./presets/t-pose-multiviews.sh -i character.png -o outputs/character.png
 ```
 
 #### Garment Multi-Views Wrapper (`garment-multiviews.sh`)

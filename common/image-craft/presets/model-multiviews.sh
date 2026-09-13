@@ -48,15 +48,17 @@ Options:
                                 Default: "left; right; back"
   -r, -a, --ratio RATIO         Aspect ratio for generated views (default: 1:1)
   -s, --size SIZE               Resolution for generated views (default: 4K)
+  -o, --output OUTPUT           Output directory (e.g. outputs/) or file stem (e.g. model.png)
   -h, --help                    Show this help message
   ...                           Any other flags are forwarded to gemini-image.py
-                                (e.g. --transparent, -m 3.1-flash, -o outputs/)
+                                (e.g. --transparent, -m 3.1-flash)
 
 Examples:
   $(basename "$0") character_front.png
   $(basename "$0") character_front.png "keep white background, clay style"
   $(basename "$0") garment.png -v "left; top; bottom" -p "account for hollow parts of the model"
   $(basename "$0") -i character_front.png -p "3D render, clay style" --transparent
+  $(basename "$0") -i character_front.png -o outputs/character.png
   $(basename "$0") -i character_front.png -r 16:9 -s 2K
 EOF
 }
@@ -73,6 +75,7 @@ EXTRA_PROMPT=""
 CUSTOM_VIEWS_RAW=""
 ASPECT_RATIO="1:1"
 IMAGE_SIZE="4K"
+OUTPUT_TARGET=""
 EXTRA_ARGS=()
 
 # Parse command-line arguments
@@ -142,7 +145,19 @@ while [[ $# -gt 0 ]]; do
             IMAGE_SIZE="${1#*=}"
             shift
             ;;
-        -m|--model|-o|--output|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
+        -o|--output)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an output path." >&2
+                exit 1
+            fi
+            OUTPUT_TARGET="$2"
+            shift 2
+            ;;
+        -o=*|--output=*)
+            OUTPUT_TARGET="${1#*=}"
+            shift
+            ;;
+        -m|--model|-f|--format|-video|--video|--previous-id|--prev|--interaction-id|--thinking-level|--api-key)
             if [[ $# -lt 2 ]]; then
                 echo "Error: $1 requires an argument." >&2
                 exit 1
@@ -150,7 +165,7 @@ while [[ $# -gt 0 ]]; do
             EXTRA_ARGS+=("$1" "$2")
             shift 2
             ;;
-        -m=*|--model=*|-o=*|--output=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
+        -m=*|--model=*|-f=*|--format=*|-video=*|--video=*|--previous-id=*|--prev=*|--interaction-id=*|--thinking-level=*|--api-key=*)
             EXTRA_ARGS+=("$1")
             shift
             ;;
@@ -270,6 +285,9 @@ fi
 echo " Total Views     : ${#VIEWS[@]}"
 echo " Aspect Ratio    : ${ASPECT_RATIO}"
 echo " Resolution      : ${IMAGE_SIZE}"
+if [[ -n "${OUTPUT_TARGET}" ]]; then
+    echo " Output Target   : ${OUTPUT_TARGET}"
+fi
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     echo " Extra Options   : ${EXTRA_ARGS[*]}"
 fi
@@ -286,6 +304,34 @@ for ITEM in "${VIEWS[@]}"; do
     echo "----------------------------------------------------------------"
     echo "[${CURRENT}/${TOTAL}] Generating ${NAME}..."
     echo "Prompt: \"${PROMPT}\""
+
+    VIEW_OUT_ARGS=()
+    if [[ -n "${OUTPUT_TARGET}" ]]; then
+        if [[ "${OUTPUT_TARGET}" == */ || -d "${OUTPUT_TARGET}" ]]; then
+            mkdir -p "${OUTPUT_TARGET}"
+            VIEW_OUT_ARGS+=("-o" "${OUTPUT_TARGET}")
+        else
+            target_dir="$(dirname "${OUTPUT_TARGET}")"
+            target_filename="$(basename "${OUTPUT_TARGET}")"
+            mkdir -p "${target_dir}"
+            if [[ "${target_filename}" =~ \. ]]; then
+                target_stem="${target_filename%.*}"
+                target_ext=".${target_filename##*.}"
+            else
+                target_stem="${target_filename}"
+                target_ext=""
+            fi
+            slug="$(echo "${NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g' | sed -E 's/^_|_$//g')"
+            slug="${slug%_view}"
+            if [[ -n "${target_ext}" ]]; then
+                view_output_file="${target_dir}/${target_stem}_${slug}${target_ext}"
+            else
+                view_output_file="${target_dir}/${target_stem}_${slug}"
+            fi
+            echo "Target File: \"${view_output_file}\""
+            VIEW_OUT_ARGS+=("-o" "${view_output_file}")
+        fi
+    fi
     echo "----------------------------------------------------------------"
 
     "${PYTHON_BIN}" "${GEMINI_SCRIPT}" \
@@ -293,6 +339,7 @@ for ITEM in "${VIEWS[@]}"; do
         -i "${REF_IMAGE}" \
         -r "${ASPECT_RATIO}" \
         -s "${IMAGE_SIZE}" \
+        ${VIEW_OUT_ARGS[@]+"${VIEW_OUT_ARGS[@]}"} \
         ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
     echo ""
