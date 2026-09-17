@@ -2576,6 +2576,9 @@ def compose_reference_prompt(
         current_img_idx += 1
 
     for ch in char_refs:
+        has_img = bool(ch.get("image") or ch.get("path"))
+        if not has_img:
+            continue
         cname = ch.get("name", "Character")
         cat = ch.get("category", "hero")
         cat_label = "Boss Titan / Nemesis" if cat == "boss" else ("Mutated Enemy / Monster" if cat == "enemy" else "Character")
@@ -2592,16 +2595,21 @@ def compose_reference_prompt(
     # 3. Scene description
     sections.append(f"[SCENE DESCRIPTION & ACTION]\n{context_prompt.strip()}")
 
-    # 4. Optional Character Visual DNA Highlights for extra precision
+    # 4. Character Visual DNA Highlights: ONLY include for characters WITHOUT reference images.
+    # When a reference image is provided, providing outdated text visual DNA often directly contradicts
+    # the image and causes multimodal models to follow text over visual likeness.
     char_dna_items = []
     for ch in char_refs:
+        has_img = bool(ch.get("image") or ch.get("path"))
+        if has_img:
+            continue
         cname = ch.get("name", "")
         cdna = ch.get("visual_dna", "")
         if cdna:
             short_dna = cdna.split(".")[0].strip() if "." in cdna else cdna[:140].strip()
             char_dna_items.append(f"- {cname}: {short_dna}")
     if char_dna_items:
-        sections.append("[CHARACTER VISUAL DNA HIGHLIGHTS]\n" + "\n".join(char_dna_items))
+        sections.append("[CHARACTER VISUAL DNA HIGHLIGHTS (TEXT-ONLY CHARACTERS)]\n" + "\n".join(char_dna_items))
 
     # 5. Art style specification
     if style_prompt and style_prompt.strip():
@@ -3563,6 +3571,35 @@ Another paragraph here.
 
         res2 = parse_style_refs_arg(["XX.png", "YY.png"])
         self.assertEqual(res2, ["XX.png", "YY.png"])
+
+    def test_compose_reference_prompt_skips_dna_when_image_provided(self):
+        chars = [
+            {
+                "name": "Alvin",
+                "image": "alvin.png",
+                "path": "/path/to/alvin.png",
+                "visual_dna": "Lean scholar in blue robe"
+            },
+            {
+                "name": "Dragon",
+                "image": None,
+                "path": "",
+                "visual_dna": "Gigantic red winged reptile"
+            }
+        ]
+        prompt = compose_reference_prompt(
+            context_prompt="Alvin faces the Dragon",
+            has_style_image=True,
+            character_refs=chars
+        )
+        # Alvin has an image -> Reference Image role assigned, text DNA skipped
+        self.assertIn("Reference Image 2 (Character Identity Reference: Alvin)", prompt)
+        self.assertNotIn("Lean scholar in blue robe", prompt)
+
+        # Dragon has NO image -> No Reference Image role, text DNA included
+        self.assertNotIn("Identity Reference: Dragon", prompt)
+        self.assertIn("[CHARACTER VISUAL DNA HIGHLIGHTS (TEXT-ONLY CHARACTERS)]", prompt)
+        self.assertIn("- Dragon: Gigantic red winged reptile", prompt)
 
     def test_extract_characters_and_style(self):
         chars = extract_characters_from_story(self.story_md)
