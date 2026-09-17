@@ -1,0 +1,8 @@
+# Output directory for generated videos
+outputs/
+
+# Virtual environment
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
