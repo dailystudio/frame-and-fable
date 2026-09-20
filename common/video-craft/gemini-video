@@ -29,6 +29,12 @@ try:
     from google import genai
     from google.genai import types
 except ImportError:
+    # Auto-detect local virtualenv if available
+    venv_python = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
+    if venv_python.exists() and sys.executable != str(venv_python):
+        import subprocess
+        result = subprocess.run([str(venv_python)] + sys.argv, check=False)
+        sys.exit(result.returncode)
     print("Error: 'google-genai' package is not installed.", file=sys.stderr)
     print("Please install it using: pip install -r requirements.txt", file=sys.stderr)
     sys.exit(1)
@@ -335,32 +341,411 @@ def concatenate_videos(video_paths: List[Path], output_path: Path, verbose: bool
             list_file.unlink()
 
 
-def enhance_prompt_with_gemini(client: genai.Client, prompt: str, verbose: bool = False) -> str:
-    """Enhance and expand user prompt using Gemini Flash for cinematic video generation."""
+DEFAULT_PROMPT_CONSTRAINTS = [
+    "Strict Art Style & Visual Medium Consistency: Explicitly state the exact visual medium and art style (e.g., 'Stylized 3D CGI animation in Disney/Pixar aesthetic' or 'Photorealistic cinematic live-action') at the very beginning of the prompt. If the input images are stylized 3D animation, cartoon, or illustration, NEVER allow the prompt to default to live-action or photorealistic human actors.",
+    "Do NOT involve or introduce new characters: Only feature the exact characters, subjects, and outfits present in the provided frames. Do not introduce unexpected extra people, animals, or modern elements.",
+    "Maintain character and asset consistency: Preserve character facial features, proportions, hair, clothing, textures, and key objects faithfully without unexpected morphs, dissolves, or alterations.",
+    "Smooth, physically plausible visual transition: Connect the start frame to the end frame through a logical, continuous visual progression (e.g. camera pull-back, subject action, or energy evolution). Do NOT use editing meta-jargon such as 'second reference image', 'push transition', 'cut to', or 'wipe', which causes the video diffusion model to hallucinate jarring cuts or unrelated scenes.",
+    "Cinematic camera work: Direct the camera with smooth, continuous cinematic motion (e.g. continuous tracking shot, slow dolly-out, push-in, subtle pan) that naturally flows from the initial scene composition to the final scene composition.",
+]
+
+
+def load_image_part(image_source: str) -> types.Part:
+    """Load an image as a types.Part for Gemini multimodal chat/content API."""
+    mime_type = get_image_mime_type(image_source) or "image/png"
+    if image_source.startswith("gs://"):
+        return types.Part.from_uri(file_uri=image_source, mime_type=mime_type)
+
+    if image_source.startswith("http://") or image_source.startswith("https://"):
+        try:
+            import requests
+            resp = requests.get(image_source, timeout=30)
+            resp.raise_for_status()
+            resp_mime = resp.headers.get("Content-Type") or mime_type
+            resp_mime = resp_mime.split(";")[0].strip()
+            return types.Part.from_bytes(data=resp.content, mime_type=resp_mime)
+        except Exception as e:
+            print(f"Error fetching image for prompt generation from URL '{image_source}': {e}", file=sys.stderr)
+            sys.exit(1)
+
+    path = Path(image_source)
+    if not path.exists():
+        print(f"Error: Input image file '{image_source}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+
     try:
-        print("[gemini-video] Enhancing prompt with Gemini...")
-        system_instruction = (
-            "You are an expert cinematic director. Expand the following prompt into a vivid, visually descriptive "
-            "prompt optimized for Veo 3.1 video generation. Detail the camera angles, lighting, motion, and atmosphere "
-            "while strictly respecting any constraints (such as 'no human voice' or sound specifications). "
-            "Return only the enhanced prompt without markdown headers or quotation marks."
-        )
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"{system_instruction}\n\nOriginal prompt: {prompt}"
-        )
-        enhanced = resp.text.strip()
-        if enhanced:
-            if verbose:
-                print(f"[gemini-video] Original Prompt: \"{prompt}\"")
-                print(f"[gemini-video] Enhanced Prompt: \"{enhanced}\"")
-            else:
-                summary = enhanced[:120] + "..." if len(enhanced) > 120 else enhanced
-                print(f"[gemini-video] Enhanced Prompt: \"{summary}\"")
-            return enhanced
+        with open(path, "rb") as f:
+            data = f.read()
+
+        if mime_type not in ["image/jpeg", "image/png", "image/webp", "image/gif"]:
+            try:
+                from PIL import Image
+                import io
+                with Image.open(path) as pil_img:
+                    buf = io.BytesIO()
+                    pil_img.convert("RGB").save(buf, format="PNG")
+                    data = buf.getvalue()
+                    mime_type = "image/png"
+            except Exception:
+                pass
+
+        return types.Part.from_bytes(data=data, mime_type=mime_type)
     except Exception as e:
-        print(f"[gemini-video] Warning: Failed to enhance prompt via Gemini ({e}). Using original prompt.", file=sys.stderr)
-    return prompt
+        print(f"Error reading image '{image_source}' for prompt generation: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def clean_prompt_output(text: str) -> str:
+    """Clean up formatting artifacts, markdown headers, code blocks, or quotes from LLM output."""
+    cleaned = text.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2:
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    cleaned = re.sub(
+        r"^(?:#+\s*)?(?:\*\*)?(?:Prompt|Enhanced Prompt|Refined Prompt|Video Prompt|Transition Prompt)(?::\*\*|\*\*:|:|\s*)+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE
+    )
+    cleaned = re.sub(
+        r"^(?:Here is the (?:refined|enhanced|generated)?\s*prompt[:\s-]*)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE
+    )
+    cleaned = cleaned.strip()
+    if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+DEFAULT_CHAT_MODEL = "gemini-3.8-flash"
+
+
+def refine_prompt_interactively(
+    chat_session: Any,
+    current_prompt: str,
+    scene_label: Optional[str] = None,
+    allow_all: bool = False,
+    clean_func: Any = clean_prompt_output,
+) -> Tuple[bool, str, bool]:
+    """Interactively review and refine prompt with user using options y/n/r/s.
+
+    Options:
+      y: yes, proceed with video generation using this prompt
+      n: no, cancel video generation
+      r: regeneration, generate a fresh alternative prompt
+      s: suggestion, user provides suggestion/feedback to modify the prompt with AI
+
+    Returns:
+        Tuple[bool, str, bool]: (proceed, prompt, yes_to_all)
+    """
+    if not sys.stdin.isatty():
+        return True, current_prompt, False
+
+    label = f" for {scene_label}" if scene_label else ""
+    options_str = "[y/n/r/s/all]" if allow_all else "[y/n/r/s]"
+
+    while True:
+        try:
+            choice = input(f"\nProceed with video generation{label}? {options_str}: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n[gemini-video] Operation cancelled by user.")
+            return False, current_prompt, False
+
+        lowered = choice.lower()
+        if not lowered:
+            print("Please enter an option: y=yes, n=no, r=regeneration, s=suggestion.")
+            continue
+        if lowered in ["y", "yes"]:
+            return True, current_prompt, False
+        elif lowered in ["n", "no", "q", "quit"]:
+            return False, current_prompt, False
+        elif allow_all and lowered in ["a", "all", "yes to all"]:
+            return True, current_prompt, True
+        elif lowered in ["r", "regen", "regeneration", "regenerate"]:
+            print(f"\n[gemini-video] Regenerating prompt with Gemini Chat API...")
+            if chat_session:
+                try:
+                    msg = (
+                        "Please regenerate a fresh alternative prompt for this video scene/transition. "
+                        "Provide a different creative variation (such as camera motion, lighting atmosphere, or scene pacing) "
+                        "while strictly adhering to all constraints (no new characters, align style with reference images). "
+                        "Return ONLY the updated prompt in plain English without markdown headings, bullet points, or quotes."
+                    )
+                    resp = chat_session.send_message(msg)
+                    raw_text = getattr(resp, "text", "") or ""
+                    new_p = clean_func(raw_text)
+                    if new_p:
+                        current_prompt = new_p
+                        print("\n" + "=" * 80)
+                        print("[gemini-video] Regenerated Prompt:")
+                        print(current_prompt)
+                        print("=" * 80)
+                    else:
+                        print("[gemini-video] Warning: Model returned empty response, keeping current prompt.")
+                except Exception as ex:
+                    print(f"[gemini-video] Warning: Regeneration failed: {ex}")
+            else:
+                print("[gemini-video] Chat session is unavailable (no active Gemini chat). Enter 'y' to proceed or 'n' to cancel.")
+        elif lowered in ["s", "suggestion", "suggest"]:
+            try:
+                suggestion = input("Enter your suggestion to modify the prompt: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return False, current_prompt, False
+
+            if not suggestion:
+                print("[gemini-video] No suggestion entered. Keeping current prompt.")
+                continue
+
+            print(f"\n[gemini-video] Modifying prompt based on suggestion: \"{suggestion}\"...")
+            if chat_session:
+                try:
+                    msg = (
+                        f"Please modify the prompt according to this suggestion from the user:\n\"{suggestion}\"\n\n"
+                        "Update and rewrite the prompt incorporating the user's suggestion while strictly maintaining "
+                        "all constraints (no new characters, align style with reference images). "
+                        "Return ONLY the modified prompt in plain English without markdown headings, bullet points, or quotes."
+                    )
+                    resp = chat_session.send_message(msg)
+                    raw_text = getattr(resp, "text", "") or ""
+                    new_p = clean_func(raw_text)
+                    if new_p:
+                        current_prompt = new_p
+                        print("\n" + "=" * 80)
+                        print("[gemini-video] Modified Prompt (Incorporating Suggestion):")
+                        print(current_prompt)
+                        print("=" * 80)
+                    else:
+                        print("[gemini-video] Warning: Model returned empty response, keeping current prompt.")
+                except Exception as ex:
+                    print(f"[gemini-video] Warning: Modification failed: {ex}")
+            else:
+                print("[gemini-video] Chat session is unavailable (no active Gemini chat). Enter 'y' to proceed or 'n' to cancel.")
+        else:
+            extra_help = ", all=yes to all" if allow_all else ""
+            print(f"Invalid option '{choice}'. Options: y=yes, n=no, r=regeneration, s=suggestion{extra_help}.")
+
+
+def confirm_proceed_with_prompt(
+    prompt: str,
+    scene_label: Optional[str] = None,
+    allow_all: bool = False,
+    chat_session: Optional[Any] = None,
+) -> Tuple[bool, str, bool]:
+    """Compatibility wrapper calling refine_prompt_interactively."""
+    return refine_prompt_interactively(
+        chat_session=chat_session,
+        current_prompt=prompt,
+        scene_label=scene_label,
+        allow_all=allow_all,
+    )
+
+
+def generate_prompt_with_gemini_chat(
+    client: genai.Client,
+    prompt: str = "",
+    first_frame_path: Optional[str] = None,
+    last_frame_path: Optional[str] = None,
+    ref_images: Optional[List[Tuple[str, str]]] = None,
+    duration_seconds: int = 8,
+    aspect_ratio: str = "16:9",
+    generate_audio: bool = True,
+    chat_model: str = DEFAULT_CHAT_MODEL,
+    extra_constraints: Optional[List[str]] = None,
+    use_default_constraints: bool = True,
+    verbose: bool = False,
+    return_chat: bool = False,
+) -> Any:
+    """Use Gemini Chat API to analyze frames/references and generate a cohesive, cinematic prompt."""
+    system_instruction = (
+        "You are an expert cinematic director and AI video prompt engineer specializing in Google Veo video generation.\n"
+        "Your objective is to craft vivid, highly descriptive, coherent video prompts that specify camera movement, "
+        "lighting, physical action, environment, and temporal progression.\n"
+        "When images are provided (start frame, end frame, and/or reference images), analyze their visual content "
+        "carefully to recognize characters, outfits, settings, lighting, and style, and construct a prompt that faithfully "
+        "animates or bridges them.\n"
+        "Always output strictly the final video prompt text ready for video generation, without conversational preamble, "
+        "markdown headings, bullet points, or quotes."
+    )
+
+    message_parts: List[Any] = []
+
+    # 1. Attach multimodal image parts
+    if first_frame_path and last_frame_path:
+        message_parts.append("### START FRAME (Initial Frame / Origin State):")
+        message_parts.append(load_image_part(first_frame_path))
+        message_parts.append("### END FRAME (Last Frame / Target State):")
+        message_parts.append(load_image_part(last_frame_path))
+    elif first_frame_path:
+        message_parts.append("### START FRAME (Initial Frame to animate):")
+        message_parts.append(load_image_part(first_frame_path))
+    elif last_frame_path:
+        message_parts.append("### END FRAME (Target Frame):")
+        message_parts.append(load_image_part(last_frame_path))
+
+    if ref_images:
+        for idx, (img_path, r_type) in enumerate(ref_images):
+            message_parts.append(f"### REFERENCE IMAGE {idx + 1} (Guidance Type: {r_type.upper()}):")
+            message_parts.append(load_image_part(img_path))
+
+    # 2. Build instructions text
+    instructions: List[str] = []
+
+    if first_frame_path and last_frame_path:
+        instructions.append(
+            f"TASK: Frame Interpolation Transition ({duration_seconds}s video, {aspect_ratio})\n"
+            "You are provided with the START FRAME and the END FRAME above.\n"
+            "1. Visual Recognition: Examine both images thoroughly. Recognize what is depicted in the START FRAME "
+            "(characters, costumes, setting, objects, camera angle, lighting, artistic style) and what is depicted in the END FRAME.\n"
+            "2. Style & Medium Identification: Identify the precise artistic style and rendering medium (e.g. 'Stylized 3D CGI animation in Disney/Pixar aesthetic', '2D anime', or 'Photorealistic cinema'). You MUST declare this medium at the very beginning of the prompt so the video model never defaults to photorealistic live action when the frames are stylized/animated.\n"
+            "3. Transition Strategy: Think through a natural, continuous visual bridge connecting the start frame to the "
+            f"end frame over {duration_seconds} seconds. NEVER use meta-jargon like 'second reference image', 'push transition', 'cut to', or 'wipe'. "
+            "Instead, describe how the camera travels or how scene elements evolve (e.g. a glowing object flares or the camera pulls back/pans within the same universe to reveal the characters).\n"
+            "4. Prompt Formulation: Write a rich, cinematic video prompt describing camera trajectory, character expressions/actions, "
+            "lighting dynamics, and environmental details to achieve a seamless, continuous transition between the two frames."
+        )
+    elif first_frame_path:
+        instructions.append(
+            f"TASK: Image-to-Video Animation ({duration_seconds}s video, {aspect_ratio})\n"
+            "You are provided with the START FRAME above.\n"
+            "1. Visual Recognition: Analyze the characters, setting, lighting, artistic style, and mood in the image.\n"
+            "2. Motion Concept: Conceive natural, compelling cinematic motion and action starting directly from this frame.\n"
+            "3. Prompt Formulation: Write a rich video prompt describing camera motion, character action, and environmental dynamics."
+        )
+    elif ref_images:
+        instructions.append(
+            f"TASK: Reference Images-Guided Video Generation ({duration_seconds}s video, {aspect_ratio})\n"
+            "Analyze the provided reference images above (characters, assets, and visual styles).\n"
+            "Formulate a detailed, cinematic prompt that seamlessly incorporates these subjects and aesthetic styles."
+        )
+    else:
+        instructions.append(
+            f"TASK: Text-to-Video Cinematic Expansion ({duration_seconds}s video, {aspect_ratio})\n"
+            "Expand and refine the video concept into a vivid, cinematic prompt optimized for Veo video generation."
+        )
+
+    if prompt:
+        instructions.append(
+            f"USER'S INITIAL PROMPT / CREATIVE INTENT:\n\"{prompt}\"\n"
+            "(Incorporate and enhance this creative intent while strictly respecting the visual content and transition between the images. "
+            "IMPORTANT: If the user's initial prompt contains editing meta-jargon like 'second reference image', 'push transition', 'cut to', "
+            "or mentions generic/incorrect subjects that contradict the actual frames, rewrite and translate it into proper physical camera motion, "
+            "exact characters, and the visual medium shown in the frames)."
+        )
+    else:
+        instructions.append(
+            "NOTE: The user did not specify a text prompt. Deduce the most compelling, visually cohesive, and natural cinematic direction from the provided frames/images."
+        )
+
+    # Constraints
+    constraints: List[str] = []
+    if use_default_constraints:
+        constraints.extend(DEFAULT_PROMPT_CONSTRAINTS)
+        if generate_audio:
+            constraints.append("Audio Synchronization: Include fitting synchronized sound effects, ambient environmental audio, and optional dialogue (in quotes) matching the scene.")
+        else:
+            constraints.append("No Audio: Do not include dialogue or sound cues as audio is disabled.")
+
+    if extra_constraints:
+        for c in extra_constraints:
+            if isinstance(c, list):
+                constraints.extend([item.strip() for item in c if item.strip()])
+            elif c.strip():
+                constraints.append(c.strip())
+
+    if constraints:
+        instructions.append("STRICT CONSTRAINTS & LIMITATIONS:")
+        for idx, c in enumerate(constraints, 1):
+            instructions.append(f"{idx}. {c}")
+
+    instructions.append(
+        "OUTPUT FORMAT:\n"
+        "Return ONLY the refined/generated video prompt text in plain English. Do not add markdown headers, 'Prompt:' labels, quotes, or conversational explanations."
+    )
+
+    message_parts.append("\n\n".join(instructions))
+
+    print(f"\n[gemini-video] Calling Gemini Chat API ({chat_model}) to generate/refine prompt...")
+    if first_frame_path:
+        print(f"  - Start Frame: {first_frame_path}")
+    if last_frame_path:
+        print(f"  - End Frame: {last_frame_path}")
+    if ref_images:
+        print(f"  - Reference Images: {', '.join([p for p, _ in ref_images])}")
+    if prompt:
+        print(f"  - Initial Prompt: \"{prompt}\"")
+    if use_default_constraints:
+        print("  - Applied Default Constraints:")
+        print("    * Don't involve new characters")
+        print("    * Align style with reference images and keyframes")
+        print("    * Maintain character and asset consistency")
+        print("    * Smooth, physically natural transition")
+        print("    * Cinematic camera direction")
+        if generate_audio:
+            print("    * Synchronized audio / ambient soundscape")
+    if extra_constraints:
+        print(f"  - Extra Constraints: {extra_constraints}")
+
+    chat = None
+    try:
+        try:
+            chat = client.chats.create(
+                model=chat_model,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.7,
+                )
+            )
+            resp = chat.send_message(message_parts)
+        except Exception as model_err:
+            err_str = str(model_err).lower()
+            if ("not found" in err_str or "not_found" in err_str or "404" in err_str) and chat_model != "gemini-2.5-flash":
+                print(f"[gemini-video] Note: '{chat_model}' not available on this endpoint. Falling back to gemini-2.5-flash...")
+                chat = client.chats.create(
+                    model="gemini-2.5-flash",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.7,
+                    )
+                )
+                resp = chat.send_message(message_parts)
+            else:
+                raise model_err
+
+        raw_output = getattr(resp, "text", "") or ""
+        refined = clean_prompt_output(raw_output)
+        if not refined:
+            raise ValueError("Gemini Chat API returned an empty response.")
+
+        print("\n" + "=" * 80)
+        print("[gemini-video] Generated / Refined Prompt:")
+        print(refined)
+        print("=" * 80 + "\n")
+        if return_chat:
+            return refined, chat
+        return refined
+    except Exception as e:
+        print(f"[gemini-video] Warning: Prompt generation via Gemini Chat API failed: {e}", file=sys.stderr)
+        if prompt:
+            print(f"[gemini-video] Falling back to initial prompt: \"{prompt}\"", file=sys.stderr)
+            fallback = prompt
+        elif first_frame_path and last_frame_path:
+            fallback = "A smooth and seamless cinematic transition from the start frame to the end frame, maintaining consistent visual style, lighting, and subjects."
+            print(f"[gemini-video] Using fallback transition prompt: \"{fallback}\"", file=sys.stderr)
+        else:
+            print("Error: No prompt available and prompt generation failed.", file=sys.stderr)
+            sys.exit(1)
+        if return_chat:
+            return fallback, None
+        return fallback
+
+
+def enhance_prompt_with_gemini(client: genai.Client, prompt: str, verbose: bool = False) -> str:
+    """Backwards-compatibility wrapper using Gemini Chat API."""
+    return generate_prompt_with_gemini_chat(client=client, prompt=prompt, verbose=verbose)
 
 
 def generate_single_video(
@@ -513,6 +898,12 @@ def parse_arguments():
   # Frame Interpolation (transition from first frame to last frame):
   gemini-video "Fog swirls around the clearing as the figure vanishes" --start-frame frame1.png --last-frame frame2.png -o vanish.mp4
 
+  # Use Gemini Chat API to generate/refine transition prompt between start and end frames:
+  gemini-video --start-frame frame1.png --last-frame frame2.png --generate-prompt -o transition.mp4
+
+  # Preview/inspect generated prompt without creating video:
+  gemini-video --start-frame frame1.png --last-frame frame2.png --generate-prompt --prompt-only
+
   # Fast generation with Veo 3.1 Fast:
   gemini-video "Cyberpunk hovercraft speeding through neon rainy streets" -m fast -o hovercraft.mp4
 """
@@ -648,10 +1039,53 @@ def parse_arguments():
         help="Negative prompt describing visual elements or sound to avoid."
     )
     parser.add_argument(
-        "--enhance-prompt",
+        "--generate-prompt", "--refine-prompt",
+        dest="generate_prompt",
         action="store_true",
-        default=None,
-        help="Enable automatic prompt enhancement."
+        default=False,
+        help="Use Gemini Chat API to analyze start/end frames or reference images and generate/refine an optimal video prompt."
+    )
+    parser.add_argument(
+        "--enhance-prompt",
+        dest="enhance_prompt_alias",
+        action="store_true",
+        default=False,
+        help="Alias for --generate-prompt."
+    )
+    parser.add_argument(
+        "--prompt-only", "--generate-prompt-only",
+        dest="generate_prompt_only",
+        action="store_true",
+        default=False,
+        help="Generate and display the prompt using Gemini Chat API, then exit without generating video."
+    )
+    parser.add_argument(
+        "--chat-model",
+        dest="chat_model",
+        default="gemini-3.8-flash",
+        help="Gemini model to use for chat prompt generation (default: gemini-3.8-flash)."
+    )
+    parser.add_argument(
+        "-y", "--yes",
+        dest="yes",
+        action="store_true",
+        default=False,
+        help="Automatically proceed with video generation after prompt generation without asking for user confirmation."
+    )
+    parser.add_argument(
+        "--prompt-constraint", "--prompt-constraints", "--constraint", "--constraints",
+        dest="prompt_constraints",
+        action="append",
+        nargs="+",
+        metavar="CONSTRAINT",
+        help="Additional custom constraint(s) or limitation(s) for the prompt generation."
+    )
+    parser.add_argument(
+        "--no-default-constraints",
+        dest="no_default_constraints",
+        action="store_true",
+        default=False,
+        help="Disable default prompt constraints ('don't involve new characters', 'align style with reference images', etc.)."
     )
     parser.add_argument(
         "--person-generation",
@@ -721,6 +1155,20 @@ def main():
     if args.list_ratios:
         list_ratios_info()
         sys.exit(0)
+
+    # Resolve prompt generation flags
+    if args.enhance_prompt_alias or args.generate_prompt_only:
+        args.generate_prompt = True
+
+    extra_constraints: List[str] = []
+    if args.prompt_constraints:
+        for item in args.prompt_constraints:
+            if isinstance(item, list):
+                for c in item:
+                    if c.strip():
+                        extra_constraints.append(c.strip())
+            elif item.strip():
+                extra_constraints.append(item.strip())
 
     # Resolve API Key
     api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -843,7 +1291,7 @@ def main():
         sys.exit(1)
 
     # Validate inputs: must have at least prompt, image, or keyframes
-    if not prompt and not raw_ref_images and not first_frame_path and not args.video_input and not keyframe_paths:
+    if not prompt and not raw_ref_images and not first_frame_path and not last_frame_path and not args.video_input and not keyframe_paths:
         print("Error: Please provide a prompt description, reference image(s), or --keyframes. Run 'gemini-video --help' for usage info.", file=sys.stderr)
         sys.exit(1)
 
@@ -902,10 +1350,6 @@ def main():
     # Initialize Gemini Client
     client = genai.Client(api_key=api_key, http_options={"timeout": 300000})
 
-    # Enhance prompt with Gemini if requested
-    if args.enhance_prompt and prompt:
-        prompt = enhance_prompt_with_gemini(client, prompt, verbose=args.verbose)
-
     # =========================================================================
     # Branch 1: Sequential Keyframes Workflow (--keyframes start mid1 mid2 end)
     # =========================================================================
@@ -920,9 +1364,36 @@ def main():
                 print(f"Error: Keyframe image '{kfp}' does not exist.", file=sys.stderr)
                 sys.exit(1)
 
+        num_segments = len(keyframe_paths) - 1
+
+        # If --prompt-only is enabled, generate and print prompts for each segment and exit
+        if args.generate_prompt_only:
+            print(f"\n[gemini-video] Generating transition prompts for {num_segments} scene segment(s)...")
+            for idx in range(num_segments):
+                k_start = keyframe_paths[idx]
+                k_end = keyframe_paths[idx + 1]
+                print(f"\n" + "=" * 80)
+                print(f"Scene {idx + 1}/{num_segments} Transition: {k_start}  --->  {k_end}")
+                print("=" * 80)
+                generate_prompt_with_gemini_chat(
+                    client=client,
+                    prompt=prompt,
+                    first_frame_path=k_start,
+                    last_frame_path=k_end,
+                    ref_images=[],
+                    duration_seconds=duration_seconds,
+                    aspect_ratio=args.aspect_ratio,
+                    generate_audio=args.generate_audio,
+                    chat_model=args.chat_model,
+                    extra_constraints=extra_constraints,
+                    use_default_constraints=not args.no_default_constraints,
+                    verbose=args.verbose,
+                )
+            print("[gemini-video] Keyframe sequence prompt generation complete (--prompt-only enabled, exiting).")
+            return
+
         final_output_path = output_path or (out_dir / f"sequence_{secrets.token_hex(6)}.mp4")
         base_stem = final_output_path.stem
-        num_segments = len(keyframe_paths) - 1
         segment_paths: List[Path] = []
 
         print(f"\n[gemini-video] Starting Sequential Keyframe Video Generation ({len(keyframe_paths)} keyframes -> {num_segments} scenes)...")
@@ -930,6 +1401,7 @@ def main():
         if prompt:
             print(f"Shared Prompt: \"{prompt}\"")
 
+        auto_confirm = args.yes
         for idx in range(num_segments):
             k_start = keyframe_paths[idx]
             k_end = keyframe_paths[idx + 1]
@@ -940,11 +1412,43 @@ def main():
             print(f"Scene {idx + 1}/{num_segments}: {k_start}  --->  {k_end}")
             print("=" * 80)
 
+            seg_prompt = prompt
+            chat_session = None
+            if args.generate_prompt:
+                seg_prompt, chat_session = generate_prompt_with_gemini_chat(
+                    client=client,
+                    prompt=prompt,
+                    first_frame_path=k_start,
+                    last_frame_path=k_end,
+                    ref_images=[],
+                    duration_seconds=duration_seconds,
+                    aspect_ratio=args.aspect_ratio,
+                    generate_audio=args.generate_audio,
+                    chat_model=args.chat_model,
+                    extra_constraints=extra_constraints,
+                    use_default_constraints=not args.no_default_constraints,
+                    verbose=args.verbose,
+                    return_chat=True,
+                )
+
+                if not auto_confirm:
+                    proceed, seg_prompt, yes_all = confirm_proceed_with_prompt(
+                        prompt=seg_prompt,
+                        scene_label=f"Scene {idx + 1}/{num_segments}",
+                        allow_all=(num_segments > 1 and idx < num_segments - 1),
+                        chat_session=chat_session,
+                    )
+                    if not proceed:
+                        print(f"\n[gemini-video] Video generation cancelled by user at Scene {idx + 1}.")
+                        return
+                    if yes_all:
+                        auto_confirm = True
+
             generate_single_video(
                 client=client,
                 api_key=api_key,
                 model_name=model_name,
-                prompt=prompt,
+                prompt=seg_prompt,
                 first_frame_path=k_start,
                 last_frame_path=k_end,
                 ref_image_objects=[],
@@ -977,6 +1481,37 @@ def main():
     # =========================================================================
     # Branch 2: Single-Shot Video Generation (Start + Middle Refs + End)
     # =========================================================================
+
+    # Generate / Refine prompt with Gemini Chat API if requested
+    if args.generate_prompt:
+        prompt, chat_session = generate_prompt_with_gemini_chat(
+            client=client,
+            prompt=prompt,
+            first_frame_path=first_frame_path,
+            last_frame_path=last_frame_path,
+            ref_images=raw_ref_images,
+            duration_seconds=duration_seconds,
+            aspect_ratio=args.aspect_ratio,
+            generate_audio=args.generate_audio,
+            chat_model=args.chat_model,
+            extra_constraints=extra_constraints,
+            use_default_constraints=not args.no_default_constraints,
+            verbose=args.verbose,
+            return_chat=True,
+        )
+
+        if args.generate_prompt_only:
+            print("[gemini-video] Prompt generation complete (--prompt-only enabled, exiting).")
+            return
+
+        if not args.yes:
+            proceed, prompt, _ = confirm_proceed_with_prompt(
+                prompt=prompt,
+                chat_session=chat_session,
+            )
+            if not proceed:
+                print("[gemini-video] Video generation cancelled by user.")
+                return
 
     # Limit reference images to 3 (Veo 3.1 API constraint)
     if len(raw_ref_images) > 3:

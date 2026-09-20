@@ -17,6 +17,20 @@ A comprehensive Python CLI tool for generating high-fidelity videos using the Go
 - **First & Last Frame Interpolation (`--start-frame` and `--last-frame`)**:
   - Specify both starting and ending frames to generate a seamless transition video between the two images.
 
+- **Gemini Chat API Prompt Generation & Visual Recognition (`--generate-prompt` / `--refine-prompt`)**:
+  - Uses Gemini Chat API (multimodal vision) to inspect start/end frames or reference images and craft an optimal prompt.
+  - When `--start-frame` and `--last-frame` are provided, Gemini recognizes the subjects, settings, and lighting in both frames and conceives a smooth, natural transition connecting them.
+  - **Enforces strict default constraints**:
+    * *No new characters*: Never invents or introduces extra characters/people not depicted in the source frames or reference images.
+    * *Style alignment*: Strictly aligns art style, medium, color grading, lighting, and visual aesthetics with the reference images and keyframes.
+    * *Character & asset consistency*: Keeps faces, hair, costumes, and props consistent throughout the video.
+    * *Smooth motion*: Directs natural physical progression and cinematic camera choreography.
+  - **Model:** Powered by Google's latest **Gemini 3.8 Flash** (`gemini-3.8-flash`) with automatic fallback to `gemini-2.5-flash`.
+  - **Interactive Confirmation & `-y` / `--yes`:**
+    * When `--generate-prompt` is run without `-y`, the tool displays the generated prompt and asks the user to confirm, edit, or cancel (`[Y/n/edit]`) before generating the video.
+    * When `-y` or `--yes` is specified, the tool automatically generates the prompt and proceeds immediately to video generation.
+  - Supports `--prompt-only` (preview prompt and exit without video generation), `--prompt-constraint` (custom limitations), and `--chat-model` (`gemini-3.8-flash` default).
+
 - **Native Synchronized Audio**:
   - Veo 3.1 natively creates synchronized high-quality soundtracks including speech/dialogue in quotes, sound effects (SFX), and ambient soundscape.
   - Can be toggled with `--audio` (default) or `--no-audio`.
@@ -140,8 +154,44 @@ python3 gemini-video.py "A character journeying across four distinct seasons fro
   -o outputs/four_seasons.mp4
 ```
 
-### 8. Frame Interpolation (Transition between First and Last Frame)
-Create a seamless transition connecting two keyframe images:
+### 8. Frame Interpolation with Gemini Chat AI Prompt Generation (`--generate-prompt`)
+Gemini 3.8 Flash recognizes the visual content in `start.png` and `end.png`, devises a natural transition prompt between them with style & character constraints, prompts user for confirmation (`[y/n/r/s]`), and generates the video:
+- `y` (yes): Proceed with video generation using current prompt.
+- `n` (no): Cancel video generation.
+- `r` (regeneration): Ask Gemini Chat API to regenerate a fresh alternative prompt.
+- `s` (suggestion): Enter your suggestion / feedback to have Gemini Chat API modify and adapt the prompt.
+
+```bash
+python3 gemini-video.py \
+  --start-frame start.png \
+  --last-frame end.png \
+  --generate-prompt \
+  -o outputs/transition.mp4
+```
+
+### 9. Automatic Generation Without Asking Confirmation (`-y` / `--yes`)
+Automatically generate prompt and proceed directly to video generation:
+```bash
+python3 gemini-video.py \
+  --start-frame start.png \
+  --last-frame end.png \
+  --generate-prompt \
+  -y \
+  -o outputs/transition.mp4
+```
+
+### 10. Preview / Inspect Prompt Without Generating Video (`--prompt-only`)
+Use Gemini Chat API to inspect frames and print the refined prompt without spending video generation credits:
+```bash
+python3 gemini-video.py \
+  --start-frame start.png \
+  --last-frame end.png \
+  --generate-prompt \
+  --prompt-only
+```
+
+### 11. Frame Interpolation with User Description
+Create a seamless transition connecting two keyframe images with explicit user prompt:
 ```bash
 python3 gemini-video.py "A mystical garden where flowers rapidly bloom as time speeds up from dawn to twilight" \
   --start-frame dawn.png \
@@ -149,7 +199,7 @@ python3 gemini-video.py "A mystical garden where flowers rapidly bloom as time s
   -o outputs/timelapse.mp4
 ```
 
-### 9. Fast Iteration with Veo 3.1 Fast
+### 12. Fast Iteration with Veo 3.1 Fast
 Generate rapid drafts with lower latency:
 ```bash
 python3 gemini-video.py "Futuristic neon train arriving at an underground station" \
@@ -181,7 +231,13 @@ python3 gemini-video.py "Futuristic neon train arriving at an underground statio
 | `--output` | `-o` | Target directory or specific file path (default: `./outputs/<operation_id>.mp4`) |
 | `--audio` / `--no-audio` | | Toggle synchronized audio generation (speech, SFX, ambient) |
 | `--negative-prompt` | | Elements or sounds to avoid in the generation |
-| `--enhance-prompt` | | Enable automatic prompt enhancement |
+| `--generate-prompt` | `--refine-prompt` | Call Gemini Chat API to analyze start/end frames or reference images and generate/refine prompt |
+| `--enhance-prompt` | | Alias for `--generate-prompt` |
+| `--prompt-only` | `--generate-prompt-only` | Generate and output prompt with Gemini Chat API, then exit without creating video |
+| `--chat-model` | | Model for Gemini Chat prompt generation (default: `gemini-3.8-flash`) |
+| `--yes` | `-y` | Automatically proceed with video generation after prompt generation without asking for confirmation |
+| `--prompt-constraint` | `--constraint` | Add custom constraint(s) or limitation(s) to prompt generation |
+| `--no-default-constraints` | | Disable default prompt constraints (no new characters, style alignment, etc.) |
 | `--person-generation` | | Person generation policy (`allow_adult` or `allow_all`) |
 | `--seed` | | Seed for reproducibility |
 | `--video` | `--extend` | Video to extend (Veo 3.1) |
