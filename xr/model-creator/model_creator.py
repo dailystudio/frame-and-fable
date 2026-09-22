@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.factory import get_provider, list_providers
 from core.models import TaskStatus
+from core.recenter import recenter_model_to_foot
 from core.exceptions import (
     ModelCreatorError,
     AuthenticationError,
@@ -204,6 +205,19 @@ def main():
         help="Geometry strategy: 'creative' or 'faithful'.",
     )
     gen_group.add_argument(
+        "--root", "--origin",
+        dest="root",
+        choices=["center", "foot", "bottom"],
+        default="center",
+        help="Root/pivot placement: 'center' (default) or 'foot'/'bottom' (ground plane min Z/Y=0 at feet).",
+    )
+    gen_group.add_argument(
+        "--root-at-foot", "--foot-origin",
+        dest="root_at_foot",
+        action="store_true",
+        help="Position root/pivot at the character's feet (ground plane min Z/Y=0) instead of model center.",
+    )
+    gen_group.add_argument(
         "--addons",
         nargs="+",
         help="Optional addons (e.g. HighPack for 4K textures).",
@@ -217,6 +231,11 @@ def main():
 
     # Operational actions
     action_group = parser.add_argument_group("Actions & Execution")
+    action_group.add_argument(
+        "--recenter",
+        metavar="FILE",
+        help="Recenter an existing 3D model file so its root origin is at the character's feet (ground plane min Z/Y=0).",
+    )
     action_group.add_argument(
         "--no-wait",
         action="store_true",
@@ -245,6 +264,18 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Handle Standalone Recenter Action
+    if args.recenter:
+        try:
+            target_p = Path(args.recenter).resolve()
+            out_p = Path(args.output_dir) / target_p.name if args.output_dir and args.output_dir != "./outputs" else None
+            res_path = recenter_model_to_foot(target_p, out_p)
+            print(f"Model successfully recentered to foot: {res_path}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"Error recentering model: {e}", file=sys.stderr)
+            sys.exit(1)
 
     try:
         provider = get_provider(name=args.provider, api_key=args.api_key)
@@ -289,6 +320,10 @@ def main():
                 file_filter = [args.format]
             print(f"Downloading results for task {args.download} into {out_dir}...")
             files = provider.download_results(args.download, out_dir, file_types=file_filter)
+            if (args.root in ("foot", "bottom") or args.root_at_foot) and files:
+                for f in files:
+                    if f.suffix.lower() in (".usdz", ".usdc", ".usda", ".glb", ".gltf", ".fbx", ".obj", ".stl"):
+                        recenter_model_to_foot(f)
             print(f"\nDownloaded {len(files)} files:")
             for f in files:
                 print(f"  - {f}")
@@ -399,6 +434,11 @@ def main():
                     status_callback=print_status_update,
                     **common_gen_kwargs,
                 )
+
+        should_recenter = (args.root in ("foot", "bottom")) or args.root_at_foot
+        if should_recenter and res.primary_model_file and res.primary_model_file.exists():
+            print("\nRecentering root origin to character feet (ground plane min Z/Y=0)...")
+            recenter_model_to_foot(res.primary_model_file)
 
         print("\n\n3D Model Generation completed successfully!")
         print(f"Task UUID:          {res.task.task_uuid}")

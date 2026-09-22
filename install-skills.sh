@@ -551,36 +551,87 @@ install_single_craft() {
   echo ""
 }
 
-# Install companion preset CLI tools (e.g., image-craft multi-view generators)
+# Install companion preset CLI tools (e.g., image-craft multi-view generators, pose-binder fix-chin-jaw)
 install_craft_presets() {
   local craft="$1"
   local craft_subdir=$(get_craft_subdir "$craft")
-  local presets_dir="${REPO_DIR}/${craft_subdir}/presets"
-
-  if [ ! -d "$presets_dir" ]; then
-    return 0
-  fi
+  local craft_path="${REPO_DIR}/${craft_subdir}"
+  local presets_dir="${craft_path}/presets"
 
   case "$craft" in
     "image-craft")
-      local preset_scripts=(
-        "model-multiviews.sh:model-multiviews"
-        "t-pose-multiviews.sh:t-pose-multiviews"
-        "garment-multiviews.sh:garment-multiviews"
-      )
-      for item in "${preset_scripts[@]}"; do
-        local src_file="${presets_dir}/${item%%:*}"
-        local bin_name="${item##*:}"
-        local target_bin="${BIN_DIR}/${bin_name}"
+      if [ -d "$presets_dir" ]; then
+        local preset_scripts=(
+          "model-multiviews.sh:model-multiviews"
+          "t-pose-multiviews.sh:t-pose-multiviews"
+          "garment-multiviews.sh:garment-multiviews"
+        )
+        for item in "${preset_scripts[@]}"; do
+          local src_file="${presets_dir}/${item%%:*}"
+          local bin_name="${item##*:}"
+          local target_bin="${BIN_DIR}/${bin_name}"
 
-        if [ -f "$src_file" ]; then
-          mkdir -p "${BIN_DIR}"
-          rm -f "$target_bin"
-          cp -f "$src_file" "$target_bin"
-          chmod 555 "$target_bin" # Read-only & executable (tamper-proof against AI)
-          echo -e "  ${GREEN}✓${RESET} Installed preset tool: ${BIN_DIR}/${bin_name} (read-only)"
+          if [ -f "$src_file" ]; then
+            mkdir -p "${BIN_DIR}"
+            rm -f "$target_bin"
+            cp -f "$src_file" "$target_bin"
+            chmod 555 "$target_bin" # Read-only & executable (tamper-proof against AI)
+            echo -e "  ${GREEN}✓${RESET} Installed preset tool: ${BIN_DIR}/${bin_name} (read-only)"
+          fi
+        done
+      fi
+      ;;
+    "pose-binder")
+      local src_script="${craft_path}/fix_chin_jaw_weights.py"
+      local target_bin="${BIN_DIR}/fix-chin-jaw"
+      local venv_python="${VENVS_BASE_DIR}/${craft}/bin/python"
+
+      if [ -f "$src_script" ]; then
+        mkdir -p "${BIN_DIR}"
+        if [ "$INSTALL_MODE" = "binary" ]; then
+          local dist_dir="${craft_path}/dist"
+          local build_dir="${craft_path}/build"
+          local venv_pyinstaller="${VENVS_BASE_DIR}/${craft}/bin/pyinstaller"
+          if [ -x "$venv_pyinstaller" ]; then
+            echo -e "  ${CYAN}🔨${RESET} Compiling companion native binary: ${BOLD}fix-chin-jaw${RESET}..."
+            local pyi_args=(
+              "--onefile"
+              "--clean"
+              "--collect-all" "pxr"
+              "--distpath" "${dist_dir}"
+              "--workpath" "${build_dir}/fix-chin-jaw"
+              "--specpath" "${build_dir}/fix-chin-jaw"
+              "--name" "fix-chin-jaw"
+            )
+            "${venv_pyinstaller}" "${pyi_args[@]}" "${src_script}" > "${build_dir}/pyi_fcj.log" 2>&1 || true
+            if [ -f "${dist_dir}/fix-chin-jaw" ]; then
+              rm -f "${target_bin}"
+              cp -f "${dist_dir}/fix-chin-jaw" "${target_bin}"
+              chmod 555 "${target_bin}"
+              rm -rf "${build_dir}/fix-chin-jaw" "${dist_dir}/fix-chin-jaw"
+              echo -e "  ${GREEN}✓${RESET} Installed native companion binary: ${target_bin} (read-only)"
+            fi
+          fi
         fi
-      done
+
+        # Fallback to CLI wrapper if binary mode was not requested or failed
+        if [ ! -f "${target_bin}" ]; then
+          cat <<EOF > "$target_bin"
+#!/usr/bin/env bash
+# Auto-generated CLI wrapper for Frame & Fable companion tool: fix-chin-jaw
+VENV_PYTHON="${venv_python}"
+SCRIPT="${src_script}"
+
+if [ -x "\${VENV_PYTHON}" ]; then
+  exec "\${VENV_PYTHON}" "\${SCRIPT}" "\$@"
+else
+  exec python3 "\${SCRIPT}" "\$@"
+fi
+EOF
+          chmod 555 "$target_bin"
+          echo -e "  ${GREEN}✓${RESET} Installed companion CLI wrapper: ${target_bin} (read-only)"
+        fi
+      fi
       ;;
   esac
 }
@@ -597,6 +648,13 @@ uninstall_craft_presets() {
           echo -e "  ${GREEN}✓${RESET} Removed preset tool: ${target_bin}"
         fi
       done
+      ;;
+    "pose-binder")
+      local target_bin="${BIN_DIR}/fix-chin-jaw"
+      if [ -f "$target_bin" ] || [ -L "$target_bin" ]; then
+        rm -f "$target_bin"
+        echo -e "  ${GREEN}✓${RESET} Removed companion tool: ${target_bin}"
+      fi
       ;;
   esac
 }
@@ -835,6 +893,7 @@ execute_install() {
   echo "  model-composer --help"
   echo "  model-creator --help"
   echo "  pose-binder --help"
+  echo "  fix-chin-jaw --help"
   echo "  rig-binder --help"
   echo ""
 }
