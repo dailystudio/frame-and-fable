@@ -11,37 +11,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 GEMINI_SCRIPT="${PROJECT_ROOT}/gemini-image.py"
 
-# Resolve python interpreter
-if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
-    PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
-elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
+# Resolve gemini-image executable (binary, wrapper, or local python script)
+GEMINI_EXEC=()
+if command -v gemini-image >/dev/null 2>&1; then
+    GEMINI_EXEC=("$(command -v gemini-image)")
+elif [[ -x "${HOME}/.local/bin/gemini-image" ]]; then
+    GEMINI_EXEC=("${HOME}/.local/bin/gemini-image")
+elif [[ -f "${GEMINI_SCRIPT}" ]]; then
+    if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
+        PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
+    elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+        PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="python"
+    else
+        echo "Error: Python interpreter not found." >&2
+        exit 1
+    fi
+    GEMINI_EXEC=("${PYTHON_BIN}" "${GEMINI_SCRIPT}")
 else
-    echo "Error: Python interpreter not found." >&2
-    exit 1
-fi
-
-if [[ ! -f "${GEMINI_SCRIPT}" ]]; then
-    echo "Error: gemini-image.py not found at ${GEMINI_SCRIPT}" >&2
+    echo "Error: Neither 'gemini-image' command nor '${GEMINI_SCRIPT}' was found." >&2
     exit 1
 fi
 
 show_help() {
     cat << EOF
 Usage:
-  $(basename "$0") <REF_IMAGE> [EXTRA_PROMPT] [OPTIONS...]
-  $(basename "$0") -i <REF_IMAGE> [-p EXTRA_PROMPT] [-v VIEWS] [OPTIONS...]
+  $(basename "$0") <REF_IMAGE> [STYLE_IMAGE] [EXTRA_PROMPT] [OPTIONS...]
+  $(basename "$0") -i <REF_IMAGE> [-S <STYLE_IMAGE>] [-p EXTRA_PROMPT] [-v VIEWS] [OPTIONS...]
 
 Arguments:
   REF_IMAGE       Path to front reference image of the model
+  STYLE_IMAGE     Optional path to reference image describing the desired style
   EXTRA_PROMPT    Optional extra prompt appended to each view prompt
 
 Options:
   -i, --image IMAGE_PATH        Path to front reference image
+  -S, --style, --style-image    Path to style reference image (e.g. "Use style.png style to draw content of model.png")
   -p, --extra-prompt PROMPT     Additional prompt to append (e.g. "keep white background")
   -v, --views VIEWS             Semicolon- or comma-separated list of views to generate
                                 (e.g. "left; top; bottom" or "front, back, left, right")
@@ -50,16 +58,16 @@ Options:
   -s, --size SIZE               Resolution for generated views (default: 4K)
   -o, --output OUTPUT           Output directory (e.g. outputs/) or file stem (e.g. model.png)
   -h, --help                    Show this help message
-  ...                           Any other flags are forwarded to gemini-image.py
+  ...                           Any other flags are forwarded to gemini-image
                                 (e.g. --transparent, -m 3.1-flash)
 
 Examples:
   $(basename "$0") character_front.png
-  $(basename "$0") character_front.png "keep white background, clay style"
-  $(basename "$0") garment.png -v "left; top; bottom" -p "account for hollow parts of the model"
-  $(basename "$0") -i character_front.png -p "3D render, clay style" --transparent
-  $(basename "$0") -i character_front.png -o outputs/character.png
-  $(basename "$0") -i character_front.png -r 16:9 -s 2K
+  $(basename "$0") character_front.png style_art.png
+  $(basename "$0") character_front.png style_art.png "cel shaded, clean lineart"
+  $(basename "$0") -i character_front.png -S style_art.png -p "3D render, clay style" --transparent
+  $(basename "$0") garment.png -S fabric_style.png -v "left; top; bottom" -p "account for hollow parts of the model"
+  $(basename "$0") -i character_front.png -o outputs/character.png -r 16:9 -s 2K
 EOF
 }
 
@@ -70,7 +78,20 @@ trim() {
     echo -n "$var"
 }
 
+is_image_file() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local ext="${file##*.}"
+        ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+        case "$ext" in
+            png|jpg|jpeg|webp|gif|bmp|tiff) return 0 ;;
+        esac
+    fi
+    return 1
+}
+
 REF_IMAGE=""
+STYLE_IMAGE=""
 EXTRA_PROMPT=""
 CUSTOM_VIEWS_RAW=""
 ASPECT_RATIO="1:1"
@@ -95,6 +116,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --image=*)
             REF_IMAGE="${1#*=}"
+            shift
+            ;;
+        -S|--style|--style-image|--style-ref)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an image path." >&2
+                exit 1
+            fi
+            STYLE_IMAGE="$2"
+            shift 2
+            ;;
+        -S=*|--style=*|--style-image=*|--style-ref=*)
+            STYLE_IMAGE="${1#*=}"
             shift
             ;;
         -p|--prompt|--extra-prompt)
@@ -182,6 +215,8 @@ while [[ $# -gt 0 ]]; do
             while [[ $# -gt 0 ]]; do
                 if [[ -z "${REF_IMAGE}" ]]; then
                     REF_IMAGE="$1"
+                elif [[ -z "${STYLE_IMAGE}" ]] && is_image_file "$1"; then
+                    STYLE_IMAGE="$1"
                 elif [[ -z "${EXTRA_PROMPT}" ]]; then
                     EXTRA_PROMPT="$1"
                 else
@@ -194,6 +229,9 @@ while [[ $# -gt 0 ]]; do
         *)
             if [[ -z "${REF_IMAGE}" && ! "$1" =~ ^- ]]; then
                 REF_IMAGE="$1"
+                shift
+            elif [[ -z "${STYLE_IMAGE}" && ! "$1" =~ ^- ]] && is_image_file "$1"; then
+                STYLE_IMAGE="$1"
                 shift
             elif [[ -z "${EXTRA_PROMPT}" && ! "$1" =~ ^- ]]; then
                 EXTRA_PROMPT="$1"
@@ -217,6 +255,38 @@ if [[ ! -f "${REF_IMAGE}" ]]; then
     echo "Error: Reference image not found: ${REF_IMAGE}" >&2
     exit 1
 fi
+
+# Resolve reference image to absolute path
+REF_IMAGE="$(cd "$(dirname "${REF_IMAGE}")" && pwd)/$(basename "${REF_IMAGE}")"
+
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    if [[ ! -f "${STYLE_IMAGE}" ]]; then
+        echo "Error: Style reference image not found: ${STYLE_IMAGE}" >&2
+        exit 1
+    fi
+    STYLE_IMAGE="$(cd "$(dirname "${STYLE_IMAGE}")" && pwd)/$(basename "${STYLE_IMAGE}")"
+fi
+
+# Helper to construct prompt with style and extra prompt
+build_view_prompt() {
+    local base="$1"
+    local p=""
+    if [[ -n "${STYLE_IMAGE}" ]]; then
+        local style_name="$(basename "${STYLE_IMAGE}")"
+        local ref_name="$(basename "${REF_IMAGE}")"
+        p="Recreate the subject and composition of ${ref_name}, strictly adopting the visual style, rendering technique, texture, and color grading from ${style_name}. ${base}"
+        if [[ -n "${EXTRA_PROMPT}" ]]; then
+            p="${p}, ${EXTRA_PROMPT}"
+        fi
+    else
+        if [[ -n "${EXTRA_PROMPT}" ]]; then
+            p="${base}, ${EXTRA_PROMPT}"
+        else
+            p="${base}"
+        fi
+    fi
+    echo "$p"
+}
 
 # Build views list
 VIEWS=()
@@ -245,12 +315,7 @@ if [[ -n "${CUSTOM_VIEWS_RAW}" ]]; then
             fi
         fi
 
-        if [[ -n "${EXTRA_PROMPT}" ]]; then
-            prompt="${base_prompt}, ${EXTRA_PROMPT}"
-        else
-            prompt="${base_prompt}"
-        fi
-
+        prompt="$(build_view_prompt "${base_prompt}")"
         VIEWS+=("${name}|${prompt}")
     done
 else
@@ -261,12 +326,7 @@ else
         base_prompt="Generate model's ${v} view"
         name="${cap_v} View"
 
-        if [[ -n "${EXTRA_PROMPT}" ]]; then
-            prompt="${base_prompt}, ${EXTRA_PROMPT}"
-        else
-            prompt="${base_prompt}"
-        fi
-
+        prompt="$(build_view_prompt "${base_prompt}")"
         VIEWS+=("${name}|${prompt}")
     done
 fi
@@ -278,7 +338,10 @@ fi
 
 echo "================================================================"
 echo " Starting Multi-view Generation"
-echo " Reference Image : ${REF_IMAGE}"
+echo " Content Image   : ${REF_IMAGE}"
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    echo " Style Reference : ${STYLE_IMAGE}"
+fi
 if [[ -n "${EXTRA_PROMPT}" ]]; then
     echo " Extra Prompt    : ${EXTRA_PROMPT}"
 fi
@@ -296,6 +359,11 @@ echo ""
 
 TOTAL=${#VIEWS[@]}
 CURRENT=1
+
+IMAGE_INPUT_ARGS=("-i" "${REF_IMAGE}")
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    IMAGE_INPUT_ARGS+=("${STYLE_IMAGE}")
+fi
 
 for ITEM in "${VIEWS[@]}"; do
     NAME="${ITEM%%|*}"
@@ -334,9 +402,9 @@ for ITEM in "${VIEWS[@]}"; do
     fi
     echo "----------------------------------------------------------------"
 
-    "${PYTHON_BIN}" "${GEMINI_SCRIPT}" \
+    "${GEMINI_EXEC[@]}" \
         "${PROMPT}" \
-        -i "${REF_IMAGE}" \
+        "${IMAGE_INPUT_ARGS[@]}" \
         -r "${ASPECT_RATIO}" \
         -s "${IMAGE_SIZE}" \
         ${VIEW_OUT_ARGS[@]+"${VIEW_OUT_ARGS[@]}"} \

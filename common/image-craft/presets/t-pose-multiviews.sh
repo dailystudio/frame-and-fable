@@ -15,35 +15,63 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 MULTIVIEW_SCRIPT="${SCRIPT_DIR}/model-multiviews.sh"
 GEMINI_SCRIPT="${PROJECT_ROOT}/gemini-image.py"
 
-if [[ ! -f "${MULTIVIEW_SCRIPT}" ]]; then
-    echo "Error: model-multiviews.sh not found at ${MULTIVIEW_SCRIPT}" >&2
-    exit 1
-fi
-
-if [[ ! -f "${GEMINI_SCRIPT}" ]]; then
-    echo "Error: gemini-image.py not found at ${GEMINI_SCRIPT}" >&2
-    exit 1
-fi
-
-# Resolve python interpreter
-if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
-    PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
-elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
-    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
+# Resolve model-multiviews executable (sibling script, command in PATH, or local script)
+MULTIVIEW_CMD=()
+if [[ -x "${SCRIPT_DIR}/model-multiviews" ]]; then
+    MULTIVIEW_CMD=("${SCRIPT_DIR}/model-multiviews")
+elif [[ -f "${SCRIPT_DIR}/model-multiviews.sh" ]]; then
+    MULTIVIEW_CMD=("${SCRIPT_DIR}/model-multiviews.sh")
+elif command -v model-multiviews >/dev/null 2>&1; then
+    MULTIVIEW_CMD=("$(command -v model-multiviews)")
+elif [[ -x "${HOME}/.local/bin/model-multiviews" ]]; then
+    MULTIVIEW_CMD=("${HOME}/.local/bin/model-multiviews")
 else
-    echo "Error: Python interpreter not found." >&2
+    echo "Error: Neither 'model-multiviews' command nor '${MULTIVIEW_SCRIPT}' was found." >&2
     exit 1
 fi
+
+# Resolve gemini-image executable (binary, wrapper, or local python script)
+GEMINI_EXEC=()
+if command -v gemini-image >/dev/null 2>&1; then
+    GEMINI_EXEC=("$(command -v gemini-image)")
+elif [[ -x "${HOME}/.local/bin/gemini-image" ]]; then
+    GEMINI_EXEC=("${HOME}/.local/bin/gemini-image")
+elif [[ -f "${GEMINI_SCRIPT}" ]]; then
+    if [[ -x "${PROJECT_ROOT}/.venv/bin/python" ]]; then
+        PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
+    elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+        PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="python"
+    else
+        echo "Error: Python interpreter not found." >&2
+        exit 1
+    fi
+    GEMINI_EXEC=("${PYTHON_BIN}" "${GEMINI_SCRIPT}")
+else
+    echo "Error: Neither 'gemini-image' command nor '${GEMINI_SCRIPT}' was found." >&2
+    exit 1
+fi
+
+is_image_file() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local ext="${file##*.}"
+        ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+        case "$ext" in
+            png|jpg|jpeg|webp|gif|bmp|tiff) return 0 ;;
+        esac
+    fi
+    return 1
+}
 
 show_help() {
     cat << EOF
 Usage:
-  $(basename "$0") <REF_IMAGE> [EXTRA_PROMPT] [OPTIONS...]
-  $(basename "$0") -i <REF_IMAGE> [-p EXTRA_PROMPT] [OPTIONS...]
+  $(basename "$0") <REF_IMAGE> [STYLE_IMAGE] [EXTRA_PROMPT] [OPTIONS...]
+  $(basename "$0") -i <REF_IMAGE> [-S <STYLE_IMAGE>] [-p EXTRA_PROMPT] [OPTIONS...]
 
 Description:
   Generates multi-view (Front, Left, Right, Back) images of a model in T-POSE.
@@ -51,16 +79,18 @@ Description:
 
   Two-phase generation workflow:
     Phase 1: Generates the front view of the model in standard T-pose using
-             the reference image and constrained prompting.
+             the reference image, optional style reference, and constrained prompting.
     Phase 2: Uses the generated front view as the canonical reference to
              generate the remaining views (Left, Right, Back by default).
 
 Arguments:
   REF_IMAGE       Path to reference image of the model (any pose or angle)
+  STYLE_IMAGE     Optional path to reference image describing the desired style
   EXTRA_PROMPT    Optional extra prompt appended to generation prompts
 
 Options:
   -i, --image IMAGE_PATH        Path to reference image
+  -S, --style, --style-image    Path to style reference image (e.g. "Use style.png style to draw content of model.png")
   -p, --prompt, --extra-prompt PROMPT
                                 Additional prompt to append (e.g. "clay style")
   -v, --views VIEWS             Override remaining views (default: "left; right; back")
@@ -76,14 +106,16 @@ Options:
 
 Examples:
   $(basename "$0") character.png
-  $(basename "$0") character.png "keep white background, clay style"
-  $(basename "$0") -i character.png -p "3D render, clay style" --transparent
+  $(basename "$0") character.png style_art.png
+  $(basename "$0") character.png style_art.png "keep white background, clay style"
+  $(basename "$0") -i character.png -S style_art.png -p "3D render, clay style" --transparent
   $(basename "$0") -i character.png -o outputs/character.png
   $(basename "$0") -i character.png -r 16:9 -s 2K
 EOF
 }
 
 REF_IMAGE=""
+STYLE_IMAGE=""
 EXTRA_PROMPT=""
 VIEWS=""
 ASPECT_RATIO="1:1"
@@ -110,6 +142,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --image=*)
             REF_IMAGE="${1#*=}"
+            shift
+            ;;
+        -S|--style|--style-image|--style-ref)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: $1 requires an image path." >&2
+                exit 1
+            fi
+            STYLE_IMAGE="$2"
+            shift 2
+            ;;
+        -S=*|--style=*|--style-image=*|--style-ref=*)
+            STYLE_IMAGE="${1#*=}"
             shift
             ;;
         -v|--views)
@@ -213,6 +257,8 @@ while [[ $# -gt 0 ]]; do
             while [[ $# -gt 0 ]]; do
                 if [[ -z "${REF_IMAGE}" ]]; then
                     REF_IMAGE="$1"
+                elif [[ -z "${STYLE_IMAGE}" ]] && is_image_file "$1"; then
+                    STYLE_IMAGE="$1"
                 elif [[ -z "${EXTRA_PROMPT}" ]]; then
                     EXTRA_PROMPT="$1"
                 else
@@ -225,6 +271,9 @@ while [[ $# -gt 0 ]]; do
         *)
             if [[ -z "${REF_IMAGE}" && ! "$1" =~ ^- ]]; then
                 REF_IMAGE="$1"
+                shift
+            elif [[ -z "${STYLE_IMAGE}" && ! "$1" =~ ^- ]] && is_image_file "$1"; then
+                STYLE_IMAGE="$1"
                 shift
             elif [[ -z "${EXTRA_PROMPT}" && ! "$1" =~ ^- ]]; then
                 EXTRA_PROMPT="$1"
@@ -252,6 +301,14 @@ fi
 # Resolve reference image to absolute path
 REF_IMAGE="$(cd "$(dirname "${REF_IMAGE}")" && pwd)/$(basename "${REF_IMAGE}")"
 
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    if [[ ! -f "${STYLE_IMAGE}" ]]; then
+        echo "Error: Style reference image not found: ${STYLE_IMAGE}" >&2
+        exit 1
+    fi
+    STYLE_IMAGE="$(cd "$(dirname "${STYLE_IMAGE}")" && pwd)/$(basename "${STYLE_IMAGE}")"
+fi
+
 # ------------------------------------------------------------------------------
 # Phase 1: Generate Front View in T-POSE (if not skipped)
 # ------------------------------------------------------------------------------
@@ -266,7 +323,19 @@ if [[ "${SKIP_FRONT_GEN}" == true ]]; then
     GENERATED_FRONT_IMAGE="${REF_IMAGE}"
 else
     # Build front view prompt with strict constraints
-    BASE_PROMPT="Create a front-view T-pose of this character. ${EXTRA_PROMPT}"
+    if [[ -n "${STYLE_IMAGE}" ]]; then
+        style_name="$(basename "${STYLE_IMAGE}")"
+        ref_name="$(basename "${REF_IMAGE}")"
+        BASE_PROMPT="Use ${style_name} style to draw the content of ${ref_name}. Create a front-view T-pose of this character"
+        if [[ -n "${EXTRA_PROMPT}" ]]; then
+            BASE_PROMPT="${BASE_PROMPT}, ${EXTRA_PROMPT}"
+        fi
+    else
+        BASE_PROMPT="Create a front-view T-pose of this character"
+        if [[ -n "${EXTRA_PROMPT}" ]]; then
+            BASE_PROMPT="${BASE_PROMPT}, ${EXTRA_PROMPT}"
+        fi
+    fi
     FRONT_VIEW_PROMPT="${FRONT_PROMPT_OVERRIDE:-$BASE_PROMPT}"
 
     # Determine Phase 1 output path argument
@@ -294,7 +363,10 @@ else
 
     echo "================================================================"
     echo " Phase 1: Generating Front View (T-POSE)"
-    echo " Reference Image : ${REF_IMAGE}"
+    echo " Content Image   : ${REF_IMAGE}"
+    if [[ -n "${STYLE_IMAGE}" ]]; then
+        echo " Style Reference : ${STYLE_IMAGE}"
+    fi
     echo " Aspect Ratio    : ${ASPECT_RATIO}"
     echo " Resolution      : ${IMAGE_SIZE}"
     if [[ -n "${EXPLICIT_FRONT_FILE}" ]]; then
@@ -306,11 +378,16 @@ else
     echo "================================================================"
     echo ""
 
+    PHASE1_IMAGE_ARGS=("-i" "${REF_IMAGE}")
+    if [[ -n "${STYLE_IMAGE}" ]]; then
+        PHASE1_IMAGE_ARGS+=("${STYLE_IMAGE}")
+    fi
+
     TMP_LOG="$(mktemp)"
     set +e
-    "${PYTHON_BIN}" "${GEMINI_SCRIPT}" \
+    "${GEMINI_EXEC[@]}" \
         "${FRONT_VIEW_PROMPT}" \
-        -i "${REF_IMAGE}" \
+        "${PHASE1_IMAGE_ARGS[@]}" \
         -r "${ASPECT_RATIO}" \
         -s "${IMAGE_SIZE}" \
         ${PHASE1_OUT_ARGS[@]+"${PHASE1_OUT_ARGS[@]}"} \
@@ -403,6 +480,9 @@ else
 fi
 
 PHASE2_ARGS=()
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    PHASE2_ARGS+=("-S" "${STYLE_IMAGE}")
+fi
 if [[ -n "${REMAINING_VIEWS}" ]]; then
     PHASE2_ARGS+=("-v" "${REMAINING_VIEWS}")
 fi
@@ -413,6 +493,9 @@ fi
 echo "================================================================"
 echo " Phase 2: Generating Remaining Views using Front View"
 echo " Canonical Front Reference : ${GENERATED_FRONT_IMAGE}"
+if [[ -n "${STYLE_IMAGE}" ]]; then
+    echo " Style Reference           : ${STYLE_IMAGE}"
+fi
 if [[ -n "${REMAINING_VIEWS}" ]]; then
     echo " Views to Generate         : ${REMAINING_VIEWS}"
 else
@@ -422,7 +505,7 @@ echo "================================================================"
 echo ""
 
 # Invoke model-multiviews.sh with generated front view as reference
-exec "${MULTIVIEW_SCRIPT}" \
+exec "${MULTIVIEW_CMD[@]}" \
     -i "${GENERATED_FRONT_IMAGE}" \
     -p "${COMBINED_PROMPT}" \
     -r "${ASPECT_RATIO}" \
