@@ -35,6 +35,9 @@ google-services.json
 
 # Keys and credentials
 primer-cli/.tos-aks.json
+.env
+.env.*
+*.env
 
 # Project statistics
 stats

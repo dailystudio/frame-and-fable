@@ -301,9 +301,19 @@ if [[ -n "${CUSTOM_VIEWS_RAW}" ]]; then
         token="$(trim "$raw")"
         [[ -z "$token" ]] && continue
 
+        lower_token="$(echo "$token" | tr '[:upper:]' '[:lower:]')"
         if [[ "$token" =~ ^[Gg]enerate ]]; then
             base_prompt="$token"
             name="$token"
+        elif [[ "$lower_token" =~ left ]]; then
+            base_prompt="Generate model's pure 90-degree left side profile view, body and head turned exactly 90 degrees facing left, standing upright"
+            name="Left View"
+        elif [[ "$lower_token" =~ right ]]; then
+            base_prompt="Generate model's pure 90-degree right side profile view, body and head turned exactly 90 degrees facing right, standing upright"
+            name="Right View"
+        elif [[ "$lower_token" =~ back ]]; then
+            base_prompt="Generate model's pure back view (rear view), facing directly away from camera, standing upright"
+            name="Back View"
         else
             cap_token="$(echo "$token" | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1')"
             if [[ "$token" =~ [Vv]iew$ ]]; then
@@ -322,9 +332,26 @@ else
     # Default views: Left, Right, Back
     DEFAULT_LIST=("left" "right" "back")
     for v in "${DEFAULT_LIST[@]}"; do
-        cap_v="$(echo "$v" | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1')"
-        base_prompt="Generate model's ${v} view"
-        name="${cap_v} View"
+        lower_v="$(echo "$v" | tr '[:upper:]' '[:lower:]')"
+        case "$lower_v" in
+            left)
+                base_prompt="Generate model's pure 90-degree left side profile view, body and head turned exactly 90 degrees facing left, standing upright"
+                name="Left View"
+                ;;
+            right)
+                base_prompt="Generate model's pure 90-degree right side profile view, body and head turned exactly 90 degrees facing right, standing upright"
+                name="Right View"
+                ;;
+            back)
+                base_prompt="Generate model's pure back view (rear view), facing directly away from camera, standing upright"
+                name="Back View"
+                ;;
+            *)
+                cap_v="$(echo "$v" | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1')"
+                base_prompt="Generate model's ${v} view"
+                name="${cap_v} View"
+                ;;
+        esac
 
         prompt="$(build_view_prompt "${base_prompt}")"
         VIEWS+=("${name}|${prompt}")
@@ -403,7 +430,7 @@ for ITEM in "${VIEWS[@]}"; do
     echo "----------------------------------------------------------------"
 
     "${GEMINI_EXEC[@]}" \
-        "${PROMPT}" \
+        -p "${PROMPT}" \
         "${IMAGE_INPUT_ARGS[@]}" \
         -r "${ASPECT_RATIO}" \
         -s "${IMAGE_SIZE}" \

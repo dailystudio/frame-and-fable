@@ -386,7 +386,7 @@ else
     TMP_LOG="$(mktemp)"
     set +e
     "${GEMINI_EXEC[@]}" \
-        "${FRONT_VIEW_PROMPT}" \
+        -p "${FRONT_VIEW_PROMPT}" \
         "${PHASE1_IMAGE_ARGS[@]}" \
         -r "${ASPECT_RATIO}" \
         -s "${IMAGE_SIZE}" \

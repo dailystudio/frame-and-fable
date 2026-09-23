@@ -468,8 +468,16 @@ def main():
         if cleaned.lower() in ["image", "images"]:
             continue
         
-        path_candidate = Path(cleaned)
-        if path_candidate.exists() and path_candidate.is_file() and get_image_mime_type(str(path_candidate)):
+        is_file = False
+        if len(cleaned) < 256 and "\n" not in cleaned and "\r" not in cleaned:
+            try:
+                path_candidate = Path(cleaned)
+                if path_candidate.exists() and path_candidate.is_file() and get_image_mime_type(str(path_candidate)):
+                    is_file = True
+            except OSError:
+                is_file = False
+
+        if is_file:
             raw_image_paths.append(str(path_candidate))
         else:
             text_prompts.append(item)

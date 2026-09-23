@@ -66,6 +66,7 @@ CRAFT_KEYS=(
   "model-creator"
   "pose-binder"
   "rig-binder"
+  "asset-generator"
 )
 
 get_craft_subdir() {
@@ -79,6 +80,7 @@ get_craft_subdir() {
     "model-creator") echo "xr/model-creator" ;;
     "pose-binder") echo "xr/pose-binder" ;;
     "rig-binder") echo "xr/rig-binder" ;;
+    "asset-generator") echo "xr/asset-generator" ;;
   esac
 }
 
@@ -93,6 +95,7 @@ get_craft_script() {
     "model-creator") echo "model_creator.py" ;;
     "pose-binder") echo "pose_binder.py" ;;
     "rig-binder") echo "rig_binder.py" ;;
+    "asset-generator") echo "asset_generator.py" ;;
   esac
 }
 
@@ -107,6 +110,7 @@ get_craft_primary_bin() {
     "model-creator") echo "model-creator" ;;
     "pose-binder") echo "pose-binder" ;;
     "rig-binder") echo "rig-binder" ;;
+    "asset-generator") echo "asset-generator" ;;
   esac
 }
 
@@ -121,6 +125,7 @@ get_craft_aliases() {
     "model-creator") echo "model-creator model_creator" ;;
     "pose-binder") echo "pose-binder pose_binder" ;;
     "rig-binder") echo "rig-binder rig_binder" ;;
+    "asset-generator") echo "asset-generator generate-asset asset-craft character-pipeline" ;;
   esac
 }
 
@@ -135,6 +140,7 @@ get_craft_desc() {
     "model-creator") echo "Generative 3D asset creator from text/images (Hyper3D / Rodin Gen-2.5)" ;;
     "pose-binder") echo "USDZ to Adobe Mixamo auto-rigging & PICO Spatial Editor pipeline" ;;
     "rig-binder") echo "Universal 3D/2D mesh rigging & skinning (Shadow Puppet & Humanoid-65)" ;;
+    "asset-generator") echo "End-to-end 3D asset generation (characters, props, 4K textures, rigging)" ;;
   esac
 }
 
@@ -895,6 +901,8 @@ execute_install() {
   echo "  pose-binder --help"
   echo "  fix-chin-jaw --help"
   echo "  rig-binder --help"
+  echo "  asset-generator --help"
+  echo "  generate-asset --help"
   echo ""
 }
 
