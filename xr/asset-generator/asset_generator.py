@@ -35,7 +35,33 @@ MAGENTA = "\033[0;35m"
 RED = "\033[0;31m"
 RESET = "\033[0m"
 
-# Default API keys and configurations
+def load_dotenv():
+    """Load API keys from gitignored .env files if not already in os.environ."""
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+        Path.home() / ".env",
+    ]
+    for env_path in candidates:
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("'\"")
+                            if k and k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
+
+load_dotenv()
+
+# Default API keys and configurations (strictly loaded from environment / .env)
 DEFAULT_HYPER3D_KEY = os.environ.get("HYPER3D_API_KEY", os.environ.get("RODIN_API_KEY", ""))
 DEFAULT_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
 
