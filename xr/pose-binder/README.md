@@ -128,11 +128,21 @@ When characters are auto-rigged using Mixamo, a very common artifact is the **"r
 
 ### ✨ Key Capabilities
 
-1. **Universal & Scale-Independent**: Uses 3D joint reference positions (`bindTransforms`) and skeletal topology rather than hardcoded coordinates. Works on characters of any height, scale, or orientation.
-2. **Topological Weight Reallocation**: Detects head/jawline vertices and strips all torso (`Spine`, `Chest`), shoulder, and arm influences, reallocating those weights directly to the `Head` bone.
-3. **RealityKit / GPU Standard**: Clamps maximum bone influences to 4 per vertex (`elementSize = 4`) and normalizes all weights to strictly sum to `1.0`.
-4. **USDZ & USDC Support**: Unpacks `.usdz` packages, fixes the underlying geometry, preserves all embedded textures and materials, and re-packages an ARKit-compliant `.usdz` (or directly edits `.usdc` files).
-5. **Zero-Setup Execution**: Automatically detects and re-launches through Blender's bundled `pxr` USD environment if standard system Python lacks the Pixar USD library.
+1. **Universal & Anatomically Bounded**: Uses 3D joint reference positions (`bindTransforms`), shoulder spans, cranial coordinate frames, and a vertical torso-alignment axis (`torso_up`). Restricts chin/jaw fixes strictly to the facial cone, eliminating collateral corruption of shoulders, upper back, or chest accessories.
+2. **Accessory & Scarf Protection (`--torso-cutoff`)**:
+   - Accurately distinguishes the chin/jawline from front chest garments, scarves, cowls, bandanas, ties, and necklaces using a relative torso height cutoff (`torso_h >= torso_cutoff * d_spine_neck`).
+   - Ensures garments resting on the upper torso maintain their natural `Spine2` and `Shoulder` weights without stretching up to the rotating head.
+3. **Beard Support (`--beard-mode`)**:
+   - Short/boxed beards (e.g. Zangief) are automatically fixed with the jawline and bound rigidly to `Head`.
+   - Long hanging beards can be processed with `--beard-mode` to apply a smooth height gradient falloff down onto the chest, preventing both chewing-gum stretching and knife-like chest penetration.
+4. **Multi-Domain Skinning Repair**:
+   - **Chin & Jaw**: Strips stray torso (`Spine`, `Chest`), shoulder, and arm influences from the chin/jaw, reallocating directly to `Head`.
+   - **Shoulder & Trapezius**: Cleans accidental `Head`/`Neck` weight bleed from outer shoulders and deltoids, reassigning to `Shoulder` (Clavicle) and `Spine2`.
+   - **Upper Back**: Strips upper arm bleed off the scapula / mid-back in A-poses.
+5. **Pristine Rollback Support (`--from-backup`)**: Safely reads from existing `*_backup.usdz` or `*_backup.usdc` files to reprocess models from uncorrupted state.
+6. **RealityKit / GPU Standard**: Clamps maximum bone influences to 4 per vertex (`elementSize = 4`) and normalizes all weights to strictly sum to `1.0`.
+7. **USDZ & USDC Support**: Unpacks `.usdz` packages, fixes underlying geometry, preserves embedded textures/materials, and re-packages an ARKit-compliant `.usdz` (or directly edits `.usdc` files).
+8. **Zero-Setup Execution**: Automatically detects and re-launches through Blender's bundled `pxr` USD environment if standard system Python lacks the Pixar USD library.
 
 ### 💻 Usage Examples
 
@@ -143,8 +153,14 @@ python3 fix_chin_jaw_weights.py outputs/ken_anim_base.usdz -o outputs/ken_anim_b
 # 2. Clean a file in-place (automatically creates a _backup file first):
 python3 fix_chin_jaw_weights.py outputs/ken_anim_base.usdz --in-place
 
-# 3. Batch-clean multiple USDZ / USDC files:
-python3 fix_chin_jaw_weights.py outputs/model1_base.usdz outputs/model2_base.usdz
+# 3. Reprocess from pristine backup (e.g. after prior corrupted runs):
+python3 fix_chin_jaw_weights.py outputs/ken_anim_base.usdz --in-place --from-backup
+
+# 4. Clean a character with a long hanging beard:
+python3 fix_chin_jaw_weights.py outputs/wizard_base.usdz --beard-mode --in-place
+
+# 5. Batch-clean multiple USDZ / USDC files:
+python3 fix_chin_jaw_weights.py outputs/*.usdz outputs/*.usdc --in-place --from-backup
 ```
 
 #### Options Reference
@@ -157,6 +173,12 @@ options:
   -h, --help            Show help message and exit.
   -o, --output OUTPUT   Output file path (single file mode only).
   --in-place            Overwrite input file in place (preserves a *_backup copy).
+  --from-backup         Read from existing <file>_backup.<ext> as pristine source.
+  --no-chin-jaw         Skip chin & jaw weight repair.
+  --no-shoulders-back   Skip shoulder and upper back weight repair.
+  --torso-cutoff TORSO_CUTOFF
+                        Relative torso height cutoff (-1.0 to 0.0) below neck to protect chest clothing/scarves/necklaces (default: -0.20).
+  --beard-mode          Enable beard mode with height gradient falloff down onto chest for long beards.
 ```
 
 ---

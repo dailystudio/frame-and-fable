@@ -89,12 +89,16 @@ pose-binder --input-mixamo --output outputs/
 
 ### Mesh Weight Correction Helper (`fix_chin_jaw_weights.py`)
 
-If automatic skinning bleeds jaw/chin vertices into the upper chest:
+Universal, anatomically-bounded cleaner for chin, jaw, shoulder, and upper back skinning weights on USDZ base models and USDC animation clips:
 ```bash
-/Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/.venv/bin/python \
-  /Volumes/Workspace/gitrepos/dailystudio/frame-and-fable/xr/pose-binder/fix_chin_jaw_weights.py \
-  --input character_anim.fbx \
-  --output character_fixed.fbx
+# Clean a USDZ model in-place (preserves _backup copy):
+python3 xr/pose-binder/fix_chin_jaw_weights.py character_anim_base.usdz --in-place
+
+# Reprocess clean models from pristine backup:
+python3 xr/pose-binder/fix_chin_jaw_weights.py character_anim_base.usdz --in-place --from-backup
+
+# Batch-clean base USDZ and motion USDC tracks:
+python3 xr/pose-binder/fix_chin_jaw_weights.py model_base.usdz model_anim_walk.usdc --in-place
 ```
 
 ---
