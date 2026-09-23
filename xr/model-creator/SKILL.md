@@ -150,6 +150,8 @@ model-creator --balance
 | `--status` | Key string | Check status of an ongoing task | None |
 | `--download` | UUID string | Download generated asset for completed task | None |
 | `--balance` | Flag | Query remaining API credits | Off |
+| `--list`, `--history` | Flag | List created models and generation tasks from account history | Off |
+| `--addons` | `HighPack`, etc. | Add-on packs (e.g. `HighPack` for 4K packed textures) | None |
 | `-o, --output-dir` | Directory | Destination folder for 3D models | `./outputs` |
 
 ---

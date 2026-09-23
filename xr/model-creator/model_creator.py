@@ -262,6 +262,18 @@ def main():
         action="store_true",
         help="Check remaining credits/balance for the selected provider.",
     )
+    action_group.add_argument(
+        "--list", "--history",
+        dest="list_tasks",
+        action="store_true",
+        help="List created models and generation tasks from account history.",
+    )
+    action_group.add_argument(
+        "--page",
+        type=int,
+        default=1,
+        help="Page number when querying task history/list (default: 1).",
+    )
 
     args = parser.parse_args()
 
@@ -292,6 +304,34 @@ def main():
             sys.exit(0)
         except Exception as e:
             print(f"Error checking balance: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Handle List Tasks Action
+    if args.list_tasks:
+        try:
+            print(f"Fetching task history for provider '{provider.provider_name}' (page {args.page})...")
+            res = provider.check_balance(usage_page=args.page)
+            usage_list = res.get("usage", [])
+            bal = res.get("balance")
+            if bal is not None:
+                print(f"Remaining Credits: {bal}\n")
+            if not usage_list:
+                print(f"No generation tasks found on page {args.page}.")
+            else:
+                print(f"{'#':<4} {'Task UUID':<38} {'Time (UTC)':<22} {'Item / Tier':<30} {'Credits':<8}")
+                print("-" * 105)
+                for idx, item in enumerate(usage_list, start=1):
+                    uuid = item.get("task_uuid", "N/A")
+                    t_str = item.get("time", "")[:19].replace("T", " ")
+                    item_name = item.get("item", "")
+                    amt = item.get("amount", "")
+                    print(f"{idx:<4} {uuid:<38} {t_str:<22} {item_name:<30} {amt:<8}")
+                print("-" * 105)
+                print("\nTo download any model by task UUID:")
+                print(f"  model-creator --download <TASK_UUID> -o {args.output_dir}")
+            sys.exit(0)
+        except Exception as e:
+            print(f"Error fetching task list: {e}", file=sys.stderr)
             sys.exit(1)
 
     # Handle Status Query Action
