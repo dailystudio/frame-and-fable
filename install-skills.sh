@@ -332,14 +332,34 @@ setup_craft_venv() {
   fi
 
   # Specific post-install steps
-  if [ "$craft" = "pose-binder" ]; then
-    echo -e "  ${CYAN}🎭${RESET} Checking Playwright Chromium browser..."
-    if command -v uv >/dev/null 2>&1; then
-      "${venv_python}" -m playwright install chromium --quiet 2>/dev/null || true
+  if [ "$craft" = "pose-binder" ] || [ "$craft" = "asset-generator" ]; then
+    echo -e "  ${CYAN}🎭${RESET} Configuring & verifying Playwright Chromium browser..."
+    local browsers_cache_dir
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      browsers_cache_dir="${HOME}/Library/Caches/ms-playwright"
+    elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win32"* ]]; then
+      browsers_cache_dir="${LOCALAPPDATA:-$HOME/AppData/Local}/ms-playwright"
     else
-      "${venv_python}" -m playwright install chromium 2>/dev/null || true
+      browsers_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright"
     fi
-    echo -e "  ${GREEN}✓${RESET} Playwright setup verified."
+    export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$browsers_cache_dir}"
+    mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}"
+
+    local pb_python="${VENVS_BASE_DIR}/pose-binder/bin/python"
+    local runner_python="${venv_python}"
+    if [ "$craft" = "asset-generator" ] && [ -f "${pb_python}" ]; then
+      runner_python="${pb_python}"
+    fi
+
+    if "${runner_python}" -m playwright --version >/dev/null 2>&1; then
+      echo -e "  ${CYAN}⬇${RESET} Installing Chromium browser into: ${PLAYWRIGHT_BROWSERS_PATH}..."
+      if PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH}" "${runner_python}" -m playwright install chromium; then
+        echo -e "  ${GREEN}✓${RESET} Playwright Chromium browser successfully installed and verified."
+      else
+        echo -e "  ${YELLOW}⚠${RESET} Playwright standard install returned non-zero, trying with system dependencies..."
+        PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH}" "${runner_python}" -m playwright install --with-deps chromium || true
+      fi
+    fi
   fi
 }
 
@@ -355,6 +375,23 @@ install_cli_wrapper() {
   mkdir -p "${BIN_DIR}"
   rm -f "${target_bin}"
 
+  local extra_env=""
+  if [ "$craft" = "pose-binder" ] || [ "$craft" = "asset-generator" ]; then
+    extra_env=$(cat <<'ENV_EOF'
+# Ensure Playwright browser cache location is preserved
+if [ -z "${PLAYWRIGHT_BROWSERS_PATH}" ] || [ "${PLAYWRIGHT_BROWSERS_PATH}" = "0" ]; then
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    export PLAYWRIGHT_BROWSERS_PATH="${HOME}/Library/Caches/ms-playwright"
+  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win32"* ]]; then
+    export PLAYWRIGHT_BROWSERS_PATH="${LOCALAPPDATA:-$HOME/AppData/Local}/ms-playwright"
+  else
+    export PLAYWRIGHT_BROWSERS_PATH="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright"
+  fi
+fi
+ENV_EOF
+)
+  fi
+
   cat <<EOF > "${target_bin}"
 #!/usr/bin/env bash
 # Auto-generated CLI wrapper for Frame & Fable craft: ${craft} (${bin_name})
@@ -362,6 +399,8 @@ REPO_DIR="${REPO_DIR}"
 CRAFT_DIR="\${REPO_DIR}/${craft_subdir}"
 VENV_PYTHON="${venv_python}"
 SCRIPT="\${CRAFT_DIR}/${script_file}"
+
+${extra_env}
 
 if [ ! -f "\${VENV_PYTHON}" ]; then
   echo "[Error] External virtual environment for ${craft} not found at: \${VENV_PYTHON}" >&2
@@ -453,6 +492,9 @@ compile_craft_binary() {
       if [ -f "${craft_path}/combine_character_pipeline.py" ]; then
         pyi_args+=("--add-data" "${craft_path}/combine_character_pipeline.py:.")
       fi
+      ;;
+    "pose-binder")
+      pyi_args+=("--collect-all" "playwright")
       ;;
   esac
 

@@ -763,6 +763,15 @@ class AssetPipeline:
             sys.exit(1)
 
         if self.args.rig_engine == "mixamo":
+            # Ensure Playwright browser cache path is set so pose-binder finds Chromium
+            if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ or os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "0":
+                if sys.platform == "darwin":
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/Library/Caches/ms-playwright")
+                elif sys.platform == "win32":
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expandvars(r"%LOCALAPPDATA%\ms-playwright")
+                else:
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
+
             pose_bin = find_tool("pose-binder")
             cmd = [
                 pose_bin,

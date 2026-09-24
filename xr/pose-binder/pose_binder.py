@@ -29,6 +29,27 @@ import time
 import zipfile
 
 
+def ensure_playwright_browsers_path():
+    """Ensure PLAYWRIGHT_BROWSERS_PATH points to the persistent system cache directory.
+
+    When packaged into a standalone binary with PyInstaller, sys.frozen is True.
+    Playwright's default behavior for frozen binaries is to force PLAYWRIGHT_BROWSERS_PATH="0",
+    which expects browsers to be located inside the temporary _MEIPASS extraction directory.
+    Setting this explicitly ensures Playwright accesses the system/user browser cache.
+    """
+    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "0":
+        if sys.platform == "darwin":
+            cache_dir = os.path.expanduser("~/Library/Caches/ms-playwright")
+        elif sys.platform == "win32":
+            cache_dir = os.path.expandvars(r"%LOCALAPPDATA%\ms-playwright")
+        else:
+            cache_dir = os.path.expanduser("~/.cache/ms-playwright")
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = cache_dir
+
+
+ensure_playwright_browsers_path()
+
+
 def to_snake_case(text):
     """Convert string to snake_case, stripping leading numeric step prefixes if present."""
     text = os.path.splitext(os.path.basename(text))[0]
@@ -272,7 +293,35 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
             ]
         }
 
-        context = p.chromium.launch_persistent_context(**launch_kwargs)
+        try:
+            context = p.chromium.launch_persistent_context(**launch_kwargs)
+        except Exception as exc:
+            err_text = str(exc)
+            if "Executable doesn't exist" in err_text or "playwright install" in err_text:
+                print("⚠️ Playwright Chromium browser missing or path changed. Automatically installing...")
+                installed = False
+                try:
+                    from playwright._impl._driver import compute_driver_executable
+                    driver_exec, driver_cli = compute_driver_executable()
+                    res = subprocess.run([driver_exec, driver_cli, "install", "chromium"], env=os.environ)
+                    if res.returncode == 0:
+                        installed = True
+                except Exception:
+                    pass
+                if not installed:
+                    try:
+                        res = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], env=os.environ)
+                        if res.returncode == 0:
+                            installed = True
+                    except Exception:
+                        pass
+                if installed:
+                    print("✅ Playwright Chromium downloaded successfully. Retrying browser launch...")
+                    context = p.chromium.launch_persistent_context(**launch_kwargs)
+                else:
+                    raise
+            else:
+                raise
         page = context.pages[0] if context.pages else context.new_page()
 
         # Mask navigator.webdriver
