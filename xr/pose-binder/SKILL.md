@@ -87,6 +87,32 @@ pose-binder --input-mixamo --output outputs/
 
 ---
 
+### Mode 4: Multi-Pose Batch Binding (`--poses p1 p2 p3`)
+
+Automates binding multiple poses/animations to a model in a single execution. Pose names are resolved against the Mixamo catalog (`~/aisandbox/mixamo/catalog.json`).
+
+Mixamo auto-rigs only once:
+- **First pose**: Converts USDZ, uploads, rigs character, downloads 1st pose, and exports **1 base USDZ** (`<model>_anim_base.usdz`) and the first animation USDC (`<model>_anim_<p1>.usdc`).
+- **Subsequent poses**: Reuses the rigged character on Mixamo (skipping upload), downloads the rest of the poses, and exports **multiple animation USDC files** (`<model>_anim_<p2>.usdc`, `<model>_anim_<p3>.usdc`, ...).
+- **Spatial Editor**: Deploys the base mesh once and composes all animation tracks into `Sources/Scenes/<Scene>.usda`.
+
+```bash
+# Batch bind from input USDZ:
+pose-binder \
+  --input character.usdz \
+  --poses walking "defeated" "jab cross" \
+  --output outputs/ \
+  --import-to-se ~/Editor/MyProject
+
+# Batch bind on already-uploaded Mixamo character:
+pose-binder \
+  --input-mixamo \
+  --poses "salsa dancing" "hip hop dancing" \
+  --output outputs/
+```
+
+---
+
 ### Mesh Weight Correction Helper (`fix_chin_jaw_weights.py`)
 
 Universal, anatomically-bounded cleaner for chin, jaw, shoulder, and upper back skinning weights on USDZ base models and USDC animation clips:
@@ -109,7 +135,9 @@ python3 xr/pose-binder/fix_chin_jaw_weights.py model_base.usdz model_anim_walk.u
 |---|---|---|
 | `--input` | Input raw character `.usdz` file | None |
 | `--input-anim` | Input pre-downloaded animated `.fbx` from Mixamo | None |
-| `--input-mixamo` | Launch interactive Mixamo browser session | Off |
+| `--input-mixamo` | Reuse existing Mixamo session to select new animation(s) | Off |
+| `--poses`, `--pose` | One or more Mixamo pose/animation names or IDs to bind (e.g. `--poses walking defeated "jab cross"`) | None |
+| `--catalog` | Custom path to Mixamo `catalog.json` (auto-detects `~/aisandbox/mixamo/catalog.json`) | Auto-detected |
 | `--output` | Destination directory for exported USD files | `./outputs` |
 | `--import-to-se` | Path to PICO Spatial Editor project root | None |
 | `--scene` | Target scene name inside Spatial Editor project | `MainScene` |
@@ -119,5 +147,6 @@ python3 xr/pose-binder/fix_chin_jaw_weights.py model_base.usdz model_anim_walk.u
 
 ## 4. Agent Best Practices
 
-1. **Headful Browser Requirement**: When using Mode 1, Playwright runs headful so markers can be visually confirmed. Ensure the user is in a desktop environment.
-2. **Batch Animation Workflow**: For multiple animations, first rig the avatar once to produce the T-pose base USDZ, then use Mode 2 with different animated FBX clips to quickly generate additional `.usdc` tracks.
+1. **Headful Browser Requirement**: When using Mode 1 or Mode 4 initial upload, Playwright runs headful so markers can be visually confirmed. Ensure the user is in a desktop environment.
+2. **Multi-Pose Binding Workflow**: Use `--poses p1 p2 p3` to automatically rig once and batch-export 1 base USDZ alongside multiple motion USDC clips, avoiding redundant uploads and manual marker placement.
+3. **Pre-Downloaded Clips**: If FBX files are already downloaded locally, process them directly with `--input-anim`.

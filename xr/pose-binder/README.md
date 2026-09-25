@@ -77,6 +77,32 @@ python3 pose_binder.py \
   --scene MainScene
 ```
 
+### Mode 4: Multi-Pose Batch Binding (`--poses p1 p2 p3`)
+
+Bind multiple Mixamo poses/animations to your model in a single execution. The pipeline automatically resolves pose names/IDs against the local Mixamo catalog (`~/aisandbox/mixamo/catalog.json`).
+
+Because Mixamo requires character rigging only once per session:
+- **First pose**: Converts input model USDZ, uploads to Mixamo, rigs the character, auto-selects and downloads the 1st pose, exports **1 base USDZ** (`<model>_anim_base.usdz`), and exports the first animation USDC (`<model>_anim_<p1>.usdc`).
+- **Second and subsequent poses**: Reuses the rigged character in the Mixamo session (skipping upload, `--input-mixamo` flow), selects and downloads the remaining poses, and exports **multiple animation USDC files** (`<model>_anim_<p2>.usdc`, `<model>_anim_<p3>.usdc`, ...).
+- **Spatial Editor**: Deploys the base model once to `Sources/Assets/`, all motion tracks into `Sources/Assets/anims/`, and composes/updates `Sources/Scenes/<SceneName>.usda` with a `SpatialStruct` for every animation.
+
+```bash
+# Full pipeline from USDZ with multiple poses:
+pose-binder \
+  --input verify/nan_ye_gde.usdz \
+  --poses walking "defeated" "jab cross" \
+  --output outputs/ \
+  --import-to-se ~/Editor/my_project \
+  --scene MainScene
+
+# Reuse existing Mixamo session to bind multiple additional poses:
+pose-binder \
+  --input-mixamo nan_ye_gde \
+  --poses "salsa dancing" "hip hop dancing" \
+  --output outputs/ \
+  --import-to-se ~/Editor/my_project
+```
+
 ---
 
 ## 📁 Output File Naming Conventions
@@ -88,9 +114,9 @@ Let **`xxx`** be the `snake_case` name of the input USDZ model (e.g. `mrye`), an
 | **Step 2** | `{xxx}_upload_to_mixamo/model.fbx`<br>`{xxx}_upload_to_mixamo/textures/` | Converted FBX model and unpacked embedded textures. |
 | **Step 3** | `{xxx}_upload_to_mixamo.zip` | Zip archive containing FBX and `textures/` for Mixamo upload. |
 | **Step 4** | `{xxx}_anim_{yyy}.fbx` | Rigged & animated FBX captured from Mixamo download. |
-| **Step 5** | `{xxx}_anim_base.usdz` | Rigged base mesh USDZ reset to T-pose (rest pose) with fixed shaders. |
-| **Step 6** | `{xxx}_anim_{yyy}.usdc` | Pure skeletal animation USDC with preserved `SkelAnimation` track title. |
-| **Step 7** | `<SE_Project>/Sources/Assets/{xxx}_without_anim.usdz`<br>`<SE_Project>/Sources/Assets/anims/{yyy}.usdc`<br>`<SE_Project>/Sources/Scenes/<SceneName>.usda` | Integrated Spatial Editor assets and composed USDA scene file. |
+| **Step 5** | `{xxx}_anim_base.usdz` | Rigged base mesh USDZ reset to T-pose (rest pose) with fixed shaders (exported **once**). |
+| **Step 6** | `{xxx}_anim_{yyy}.usdc` | Pure skeletal animation USDC with preserved `SkelAnimation` track title (**one per pose**). |
+| **Step 7** | `<SE_Project>/Sources/Assets/{xxx}_without_anim.usdz`<br>`<SE_Project>/Sources/Assets/anims/{yyy}.usdc`<br>`<SE_Project>/Sources/Scenes/<SceneName>.usda` | Integrated Spatial Editor assets and composed USDA scene file with `SpatialStruct` for each pose. |
 
 ---
 
@@ -104,6 +130,9 @@ options:
                         Path to Mixamo animated FBX file (skips Steps 1-4, runs Steps 5-6)
   --input-mixamo [INPUT_MIXAMO]
                         Reuse existing Mixamo.com character session to select a new animation action (skips Steps 1-3, runs Steps 4-6)
+  --poses POSES [POSES ...], --pose POSES [POSES ...]
+                        One or more Mixamo pose/animation names or IDs to bind (e.g. --poses walking punching 'jab cross')
+  --catalog CATALOG     Custom path to Mixamo catalog.json (default: ~/aisandbox/mixamo/catalog.json)
   --output OUTPUT       Output directory for generated pipeline artifacts (default: outputs/)
   --import-to-se IMPORT_TO_SE
                         Target Spatial Editor project path (runs Step 7)

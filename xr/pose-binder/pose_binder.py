@@ -52,9 +52,16 @@ ensure_playwright_browsers_path()
 
 def to_snake_case(text):
     """Convert string to snake_case, stripping leading numeric step prefixes if present."""
-    text = os.path.splitext(os.path.basename(text))[0]
-    # Remove leading digits and separators e.g. '1_model_orig' -> 'model_orig'
-    text = re.sub(r"^\d+[_\-\s]*", "", text)
+    if "/" in text or "\\" in text:
+        _, ext = os.path.splitext(text)
+        if ext and (os.path.exists(text) or ext.lower() in [".usdz", ".usdc", ".fbx", ".obj", ".blend", ".zip"]):
+            text = os.path.splitext(os.path.basename(text))[0]
+        else:
+            text = text.replace("/", " ").replace("\\", " ")
+    else:
+        text = os.path.splitext(text)[0]
+    # Remove leading numeric step prefixes like '1_model' or '01-mesh', but preserve numbers in titles
+    text = re.sub(r"^\d+[_\-]\s*", "", text)
     # Convert camelCase / PascalCase to snake_case
     text = re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", text)
     # Replace non-alphanumeric characters with underscores
@@ -112,6 +119,213 @@ def run_blender_script(blender_bin, script_code, args=None):
         print(result.stderr)
         raise RuntimeError(f"Blender process failed with exit code {result.returncode}")
     return result.stdout
+
+
+def load_mixamo_catalog(custom_path=None):
+    """Load Mixamo motion catalog items from JSON.
+
+    Checks:
+      1. custom_path (if provided)
+      2. MIXAMO_CATALOG_PATH environment variable
+      3. ~/aisandbox/mixamo/catalog.json
+      4. ./catalog.json in script or working directory
+    Returns (items_list, source_path_or_None)
+    """
+    candidates = []
+    if custom_path:
+        candidates.append(os.path.abspath(os.path.expanduser(custom_path)))
+    env_path = os.environ.get("MIXAMO_CATALOG_PATH")
+    if env_path:
+        candidates.append(os.path.abspath(os.path.expanduser(env_path)))
+    candidates.append(os.path.expanduser("~/aisandbox/mixamo/catalog.json"))
+    script_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else "."
+    candidates.append(os.path.join(script_dir, "catalog.json"))
+
+    for p in candidates:
+        if os.path.exists(p) and os.path.isfile(p):
+            try:
+                import json
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                items = data.get("items", [])
+                if items:
+                    return items, p
+            except Exception:
+                pass
+    return [], None
+
+
+def resolve_pose_item(query, items=None):
+    """Resolve a user-provided pose query (name, partial name, slug, or motion_id) against catalog.
+
+    Returns dict:
+      {"name": <canonical title>, "slug": <snake_case_slug>, "id": <motion_id_or_None>, "match_type": <type>}
+    """
+    q = query.strip()
+    if not q:
+        return None
+    q_lower = q.lower()
+    q_slug = to_snake_case(q)
+
+    if items:
+        # 1. Exact name match (case-insensitive)
+        for it in items:
+            name = (it.get("name") or "").strip()
+            if name.lower() == q_lower:
+                return {"name": name, "slug": to_snake_case(name), "id": it.get("id"), "match_type": "exact_name"}
+
+        # 2. Exact slug match
+        for it in items:
+            name = (it.get("name") or "").strip()
+            if to_snake_case(name) == q_slug:
+                return {"name": name, "slug": to_snake_case(name), "id": it.get("id"), "match_type": "exact_slug"}
+
+        # 3. ID / motion_id match
+        for it in items:
+            it_id = (it.get("id") or "").lower()
+            it_m_id = (it.get("motion_id") or "").lower()
+            if q_lower in (it_id, it_m_id):
+                name = (it.get("name") or "").strip()
+                return {"name": name, "slug": to_snake_case(name), "id": it.get("id"), "match_type": "id"}
+
+        # 4. Prefix match on name
+        for it in items:
+            name = (it.get("name") or "").strip()
+            if name.lower().startswith(q_lower):
+                return {"name": name, "slug": to_snake_case(name), "id": it.get("id"), "match_type": "prefix_name"}
+
+        # 5. Substring match on name (prefer shortest name to get closest match)
+        sub_matches = [it for it in items if q_lower in (it.get("name") or "").lower()]
+        if sub_matches:
+            sub_matches.sort(key=lambda x: len(x.get("name") or ""))
+            best = sub_matches[0]
+            name = best.get("name", "").strip()
+            return {"name": name, "slug": to_snake_case(name), "id": best.get("id"), "match_type": "substring_name"}
+
+        # 6. Description match
+        desc_matches = [it for it in items if q_lower in (it.get("description") or "").lower()]
+        if desc_matches:
+            best = desc_matches[0]
+            name = best.get("name", "").strip()
+            return {"name": name, "slug": to_snake_case(name), "id": best.get("id"), "match_type": "description"}
+
+    # Fallback when not found in catalog or no catalog available
+    title = q.title()
+    return {"name": title, "slug": to_snake_case(q), "id": None, "match_type": "fallback"}
+
+
+def resolve_poses(queries, catalog_path=None):
+    """Resolve a list of pose queries against the Mixamo catalog.
+
+    Supports comma-separated strings (e.g. ['walking, defeated']).
+    Returns (resolved_pose_dicts, catalog_items, catalog_source_path)
+    """
+    items, src_path = load_mixamo_catalog(catalog_path)
+    resolved = []
+    seen_slugs = set()
+    raw_list = []
+    for q in queries:
+        for part in q.split(","):
+            part_clean = part.strip()
+            if part_clean:
+                raw_list.append(part_clean)
+
+    for q in raw_list:
+        item = resolve_pose_item(q, items)
+        if item and item["slug"] not in seen_slugs:
+            seen_slugs.add(item["slug"])
+            resolved.append(item)
+    return resolved, items, src_path
+
+
+def auto_select_pose_in_mixamo(page, pose_name):
+    """Automate searching, selecting, and clicking DOWNLOAD for pose_name in Mixamo UI.
+
+    Returns True if successfully clicked download trigger.
+    """
+    try:
+        # Dismiss any open modal dialog (e.g. from previous download)
+        try:
+            cancel_btn = page.query_selector('.asset-download-modal button:has-text("CANCEL"), .modal button:has-text("CANCEL")')
+            if cancel_btn and cancel_btn.is_visible():
+                cancel_btn.click()
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        search_input = page.query_selector('input[type="search"], input[placeholder="Search"], input[name="search"]')
+        if not search_input or not search_input.is_visible():
+            return False
+
+        print(f"🔍 Searching Mixamo catalog for '{pose_name}'...")
+        search_input.click()
+        search_input.fill("")
+        search_input.fill(pose_name)
+        search_input.press("Enter")
+        page.wait_for_timeout(2000)
+
+        # Collect matching animation cards
+        cards = page.query_selector_all(".product.product-animation")
+        if not cards:
+            print(f"⚠️ No animation cards returned for query '{pose_name}'.")
+            return False
+
+        chosen_card = None
+        # Priority 1: Exact match on title
+        for c in cards:
+            try:
+                title = c.inner_text().split("\n")[0].strip()
+                if title.lower() == pose_name.lower():
+                    chosen_card = (c, title)
+                    break
+            except Exception:
+                pass
+
+        # Priority 2: Starts with
+        if not chosen_card:
+            for c in cards:
+                try:
+                    title = c.inner_text().split("\n")[0].strip()
+                    if title.lower().startswith(pose_name.lower()):
+                        chosen_card = (c, title)
+                        break
+                except Exception:
+                    pass
+
+        # Priority 3: First returned card
+        if not chosen_card and cards:
+            try:
+                title = cards[0].inner_text().split("\n")[0].strip()
+                chosen_card = (cards[0], title)
+            except Exception:
+                pass
+
+        if not chosen_card:
+            return False
+
+        card_elem, card_title = chosen_card
+        print(f"🎯 Selecting animation card: '{card_title}'...")
+        card_elem.click()
+        page.wait_for_timeout(3000)
+
+        # Click top-level DOWNLOAD button
+        dl_btn = page.query_selector("button:has-text('DOWNLOAD')")
+        if dl_btn and dl_btn.is_visible():
+            print("Clicking 'DOWNLOAD' button on Mixamo...")
+            dl_btn.click()
+            page.wait_for_timeout(1500)
+
+            # Click modal DOWNLOAD button
+            modal_dl = page.query_selector(
+                ".asset-download-modal button:has-text('DOWNLOAD'), .modal-footer button.btn-primary:has-text('DOWNLOAD')"
+            )
+            if modal_dl and modal_dl.is_visible():
+                print(f"Clicking modal confirmation DOWNLOAD for '{card_title}'...")
+                modal_dl.click()
+                return True
+    except Exception as e:
+        print(f"Notice: Auto-selection for '{pose_name}' had non-fatal error: {e}. Interactive fallback available.")
+    return False
 
 
 def step2_convert_usdz_to_fbx(blender_bin, usdz_path, output_dir, model_name):
@@ -192,23 +406,34 @@ def step3_package_for_mixamo(step2_folder, fbx_path, output_dir, model_name):
     return zip_path
 
 
-def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, skip_upload=False):
+def step4_launch_interactive_mixamo_browser(
+    zip_path,
+    output_dir,
+    model_name,
+    skip_upload=False,
+    target_poses=None,
+    catalog_path=None,
+):
     """
     Step 4: Launch a headful browser, navigate to Mixamo, auto-upload {xxx}_upload_to_mixamo.zip
-    (or reuse existing uploaded session if skip_upload=True), wait for user animation download,
+    (or reuse existing uploaded session if skip_upload=True), select and download requested animation(s),
     and save to {xxx}_anim_{yyy}.fbx.
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("Playwright is not installed. Please install with: pip install playwright && playwright install chromium")
-        return None, None, None
+        return (None, None, None) if target_poses is None else []
 
     zip_path_abs = os.path.abspath(zip_path) if zip_path else None
 
     print("\n" + "=" * 70)
     print("Launching interactive browser for Mixamo (Step 4)...")
-    if skip_upload:
+    if target_poses:
+        print(f"Target poses to bind ({len(target_poses)}):")
+        for i, tp in enumerate(target_poses):
+            print(f"  [{i + 1}] {tp['name']} (slug: {tp['slug']})")
+    elif skip_upload:
         print("Reusing existing uploaded Mixamo character session.")
         print("Please pick your desired animation action and click DOWNLOAD in Mixamo.")
     else:
@@ -275,8 +500,10 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
             pass
         return "animation"
 
-    detected_fbx_path = [None]
-    detected_anim_raw = ["animation"]
+    downloaded_results = []
+    current_pose_idx = [0]
+    current_download_finished = [False]
+    last_downloaded_fbx = [None]
 
     with sync_playwright() as p:
         # Launch Playwright bundled Chromium with persistent context and stealth args
@@ -327,14 +554,21 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
         # Mask navigator.webdriver
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        anim_downloaded = [False]
-
         def on_download(download):
-            raw_title = os.path.splitext(download.suggested_filename)[0]
-            if not raw_title or len(raw_title) > 20 or "-" in raw_title:
-                raw_title = get_mixamo_animation_title(page)
+            idx = current_pose_idx[0]
+            curr_pose = target_poses[idx] if (target_poses and idx < len(target_poses)) else None
+            sugg_name = download.suggested_filename
+            if curr_pose:
+                raw_title = curr_pose["name"]
+                anim_slug = curr_pose["slug"]
+            else:
+                raw_title = os.path.splitext(sugg_name)[0]
+                if not raw_title or len(raw_title) > 20 or "-" in raw_title:
+                    raw_title = get_mixamo_animation_title(page)
+                anim_slug = to_snake_case(raw_title)
+
             print("\n" + "=" * 70)
-            print(f"📥 [EVENT] Browser download event triggered for: '{download.suggested_filename}' (Animation: '{raw_title}')")
+            print(f"📥 [EVENT] Browser download event triggered for: '{sugg_name}' (Animation: '{raw_title}')")
             print("⏳ [DOWNLOAD STREAM] Receiving file from Mixamo server... Please wait...")
             print("=" * 70)
             try:
@@ -344,15 +578,11 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
                     final_bytes = os.path.getsize(file_path)
                     final_mb = final_bytes / (1024 * 1024)
                     print(f"✅ [DOWNLOAD COMPLETE] Received {final_bytes:,} bytes ({final_mb:.2f} MB)")
-                    anim_slug = to_snake_case(raw_title)
                     target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
                     shutil.copy2(file_path, target_fbx)
                     print(f"📁 [SAVED] Successfully exported Mixamo animation FBX to:\n   -> {target_fbx}")
-                    detected_fbx_path[0] = target_fbx
-                    detected_anim_raw[0] = raw_title
-                    print("🚪 [SHUTDOWN] Closing browser window in 3 seconds...\n")
-                    time.sleep(3)
-                    anim_downloaded[0] = True
+                    last_downloaded_fbx[0] = (target_fbx, anim_slug, raw_title)
+                    current_download_finished[0] = True
             except Exception as e:
                 print(f"❌ [DOWNLOAD ERROR] Failed to capture download: {e}")
 
@@ -367,116 +597,172 @@ def step4_launch_interactive_mixamo_browser(zip_path, output_dir, model_name, sk
         downloads_dir = os.path.expanduser("~/Downloads")
         initial_fbx_files = set(os.listdir(downloads_dir)) if os.path.exists(downloads_dir) else set()
 
-        start_time = time.time()
-        print("\n" + "-" * 70)
-        if skip_upload:
-            print("⌛ Step 4 Active: Reusing currently uploaded Mixamo character session!")
-            print("   1. Pick your desired animation action in Mixamo")
-            print("   2. Click the red DOWNLOAD button on Mixamo")
-        else:
-            print("⌛ Step 4 Active: Please interact with Mixamo in the open browser window:")
-            print("   1. Adjust rigging markers (chin, wrists, elbows, knees, groin)")
-            print("   2. Click NEXT to complete auto-rigging")
-            print("   3. Pick your desired animation")
-            print("   4. Click the red DOWNLOAD button on Mixamo")
-        print("-" * 70 + "\n")
+        total_poses = len(target_poses) if target_poses else 1
 
-        while not anim_downloaded[0] and (time.time() - start_time < 600):
-            if not uploaded and zip_path_abs:
-                try:
-                    file_input = page.query_selector("input[type='file']")
-                    if file_input:
-                        print("Found file input! Auto-uploading character package...")
-                        file_input.set_input_files(zip_path_abs)
-                        uploaded = True
-                        print("Character package uploaded into Mixamo! Waiting for manual rigging & animation download...")
+        for p_idx in range(total_poses):
+            current_pose_idx[0] = p_idx
+            current_download_finished[0] = False
+            last_downloaded_fbx[0] = None
+            curr_pose = target_poses[p_idx] if target_poses else None
+            pose_name = curr_pose["name"] if curr_pose else "Animation"
+            pose_selected = False
+
+            print("\n" + "-" * 70)
+            if target_poses:
+                print(f"🎯 Step 4 Active [{p_idx + 1}/{total_poses}]: Binding pose '{pose_name}'")
+                if p_idx > 0:
+                    print("   Reusing currently uploaded & rigged character on Mixamo (skipping upload).")
+            elif skip_upload:
+                print("⌛ Step 4 Active: Reusing currently uploaded Mixamo character session!")
+                print("   1. Pick your desired animation action in Mixamo")
+                print("   2. Click the red DOWNLOAD button on Mixamo")
+            else:
+                print("⌛ Step 4 Active: Please interact with Mixamo in the open browser window:")
+                print("   1. Adjust rigging markers (chin, wrists, elbows, knees, groin)")
+                print("   2. Click NEXT to complete auto-rigging")
+                print("   3. Pick your desired animation")
+                print("   4. Click the red DOWNLOAD button on Mixamo")
+            print("-" * 70 + "\n")
+
+            start_time = time.time()
+            pose_timeout = 600 if (p_idx == 0 and not skip_upload) else 180
+
+            while not current_download_finished[0] and (time.time() - start_time < pose_timeout):
+                if not uploaded and zip_path_abs:
+                    try:
+                        file_input = page.query_selector("input[type='file']")
+                        if file_input:
+                            print("Found file input! Auto-uploading character package...")
+                            file_input.set_input_files(zip_path_abs)
+                            uploaded = True
+                            print("Character package uploaded into Mixamo! Waiting for manual rigging & animation selection...")
+                        else:
+                            upload_btn = page.query_selector("button:has-text('Upload Character'), [data-testid='upload-character']")
+                            if upload_btn and upload_btn.is_visible():
+                                print("Clicking 'Upload Character' button...")
+                                upload_btn.click()
+                                time.sleep(1)
+                    except Exception:
+                        pass
+
+                # If target pose is specified and not selected yet, check if search bar is visible
+                if curr_pose and not pose_selected:
+                    try:
+                        search_input = page.query_selector('input[type="search"], input[placeholder="Search"], input[name="search"]')
+                        ar_modal = page.query_selector('.autorigger-modal, [class*="autorigger"]')
+                        if search_input and search_input.is_visible() and not ar_modal:
+                            if auto_select_pose_in_mixamo(page, curr_pose["name"]):
+                                pose_selected = True
+                    except Exception:
+                        pass
+
+                # Print periodic status hint every 10 seconds
+                elapsed = int(time.time() - start_time)
+                if elapsed > 0 and elapsed % 10 == 0:
+                    if curr_pose:
+                        print(f"⌛ [{elapsed}s] Processing pose [{p_idx + 1}/{total_poses}] '{pose_name}'...")
+                    elif skip_upload:
+                        print(f"⌛ [{elapsed}s] Waiting in Mixamo: Pick animation -> Click DOWNLOAD")
                     else:
-                        upload_btn = page.query_selector("button:has-text('Upload Character'), [data-testid='upload-character']")
-                        if upload_btn and upload_btn.is_visible():
-                            print("Clicking 'Upload Character' button...")
-                            upload_btn.click()
-                            time.sleep(1)
+                        print(f"⌛ [{elapsed}s] Waiting in Mixamo: Adjust rigging markers -> Click Next -> Pick animation -> Click DOWNLOAD")
+
+                # 1. Check ~/Downloads for newly downloaded file
+                if os.path.exists(downloads_dir):
+                    for f in os.listdir(downloads_dir):
+                        if not any(f.lower().endswith(ext) for ext in [".crdownload", ".tmp", ".part", ".download"]):
+                            new_path = os.path.join(downloads_dir, f)
+                            if os.path.isfile(new_path) and (f not in initial_fbx_files or os.path.getmtime(new_path) >= start_time - 30):
+                                if (f.lower().endswith(".fbx") or len(f) > 20) and os.path.getsize(new_path) > 100000:
+                                    if wait_for_file_completion(new_path, min_size=50000, stability_sec=1):
+                                        if curr_pose:
+                                            raw_title = curr_pose["name"]
+                                            anim_slug = curr_pose["slug"]
+                                        else:
+                                            raw_title = os.path.splitext(f)[0] if f.lower().endswith(".fbx") else get_mixamo_animation_title(page)
+                                            anim_slug = to_snake_case(raw_title)
+                                        target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
+                                        print(f"\n📥 [DOWNLOAD DETECTED IN ~/Downloads] File: {f} (Animation: '{raw_title}')")
+                                        shutil.copy2(new_path, target_fbx)
+                                        print(f"Copied {f} ({os.path.getsize(target_fbx):,} bytes) to {target_fbx}")
+                                        last_downloaded_fbx[0] = (target_fbx, anim_slug, raw_title)
+                                        current_download_finished[0] = True
+                                        break
+
+                if current_download_finished[0]:
+                    break
+
+                # 2. Check Playwright temporary download artifacts directory
+                import tempfile
+                temp_sys_dir = tempfile.gettempdir()
+                try:
+                    for root_dir, _, files_list in os.walk(temp_sys_dir):
+                        if "playwright-artifacts-" in root_dir:
+                            for file_name in files_list:
+                                full_artifact_path = os.path.join(root_dir, file_name)
+                                if os.path.isfile(full_artifact_path) and os.path.getmtime(full_artifact_path) >= start_time - 30:
+                                    if not any(file_name.lower().endswith(ext) for ext in [".crdownload", ".tmp", ".part", ".download"]):
+                                        if os.path.getsize(full_artifact_path) > 100000 and wait_for_file_completion(full_artifact_path, min_size=50000, stability_sec=1):
+                                            if curr_pose:
+                                                raw_title = curr_pose["name"]
+                                                anim_slug = curr_pose["slug"]
+                                            else:
+                                                raw_title = get_mixamo_animation_title(page)
+                                                anim_slug = to_snake_case(raw_title)
+                                            target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
+                                            print(f"\n📥 [DOWNLOAD DETECTED IN PLAYWRIGHT ARTIFACTS] File: {file_name} (Animation: '{raw_title}')")
+                                            shutil.copy2(full_artifact_path, target_fbx)
+                                            print(f"Copied artifact ({os.path.getsize(target_fbx):,} bytes) to {target_fbx}")
+                                            last_downloaded_fbx[0] = (target_fbx, anim_slug, raw_title)
+                                            current_download_finished[0] = True
+                                            break
+                            if current_download_finished[0]:
+                                break
                 except Exception:
                     pass
 
-            # Print periodic status hint every 10 seconds
-            elapsed = int(time.time() - start_time)
-            if elapsed > 0 and elapsed % 10 == 0:
-                if skip_upload:
-                    print(f"⌛ [{elapsed}s] Waiting in Mixamo: Pick animation -> Click DOWNLOAD")
-                else:
-                    print(f"⌛ [{elapsed}s] Waiting in Mixamo: Adjust rigging markers -> Click Next -> Pick animation -> Click DOWNLOAD")
+                if current_download_finished[0]:
+                    break
 
-            # 1. Check ~/Downloads for any newly downloaded / recently modified FBX or UUID download file
-            if os.path.exists(downloads_dir):
-                for f in os.listdir(downloads_dir):
-                    if not any(f.lower().endswith(ext) for ext in [".crdownload", ".tmp", ".part", ".download"]):
-                        new_path = os.path.join(downloads_dir, f)
-                        if os.path.isfile(new_path) and (f not in initial_fbx_files or os.path.getmtime(new_path) >= start_time - 30):
-                            if (f.lower().endswith(".fbx") or len(f) > 20) and os.path.getsize(new_path) > 100000:
-                                if wait_for_file_completion(new_path, min_size=50000, stability_sec=1):
-                                    raw_title = os.path.splitext(f)[0] if f.lower().endswith(".fbx") else get_mixamo_animation_title(page)
-                                    anim_slug = to_snake_case(raw_title)
-                                    target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
-                                    print(f"\n📥 [DOWNLOAD DETECTED IN ~/Downloads] File: {f} (Animation: '{raw_title}')")
-                                    shutil.copy2(new_path, target_fbx)
-                                    print(f"Copied {f} ({os.path.getsize(target_fbx):,} bytes) to {target_fbx}")
-                                    detected_fbx_path[0] = target_fbx
-                                    detected_anim_raw[0] = raw_title
-                                    print("Download 100% complete! Closing browser in 3 seconds...")
-                                    time.sleep(3)
-                                    anim_downloaded[0] = True
-                                    break
+                # 3. Check output_dir for any newly created animated FBX file
+                if os.path.exists(output_dir):
+                    for f in os.listdir(output_dir):
+                        if f.lower().endswith(".fbx") and ("_anim_" in f or "4_model_anim" in f):
+                            cand_path = os.path.join(output_dir, f)
+                            if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 50000 and os.path.getmtime(cand_path) >= start_time - 30:
+                                cand_model, anim_slug, anim_raw_name = parse_anim_info_from_fbx(cand_path, model_name)
+                                if curr_pose:
+                                    anim_slug = curr_pose["slug"]
+                                    anim_raw_name = curr_pose["name"]
+                                print(f"\n📥 [ANIMATED FBX DETECTED IN OUTPUT DIR] File: {f}")
+                                last_downloaded_fbx[0] = (cand_path, anim_slug, anim_raw_name)
+                                current_download_finished[0] = True
+                                break
 
-            # 2. Check Playwright temporary download artifacts directory for blob downloads (UUID files)
-            import tempfile
-            temp_sys_dir = tempfile.gettempdir()
-            try:
-                for root_dir, _, files_list in os.walk(temp_sys_dir):
-                    if "playwright-artifacts-" in root_dir:
-                        for file_name in files_list:
-                            full_artifact_path = os.path.join(root_dir, file_name)
-                            if os.path.isfile(full_artifact_path) and os.path.getmtime(full_artifact_path) >= start_time - 30:
-                                if not any(file_name.lower().endswith(ext) for ext in [".crdownload", ".tmp", ".part", ".download"]):
-                                    if os.path.getsize(full_artifact_path) > 100000 and wait_for_file_completion(full_artifact_path, min_size=50000, stability_sec=1):
-                                        raw_title = detected_anim_raw[0] if detected_anim_raw[0] and detected_anim_raw[0] != "animation" else get_mixamo_animation_title(page)
-                                        anim_slug = to_snake_case(raw_title)
-                                        target_fbx = os.path.join(output_dir, f"{model_name}_anim_{anim_slug}.fbx")
-                                        print(f"\n📥 [DOWNLOAD DETECTED IN PLAYWRIGHT ARTIFACTS] File: {file_name} (Animation: '{raw_title}')")
-                                        shutil.copy2(full_artifact_path, target_fbx)
-                                        print(f"Copied artifact ({os.path.getsize(target_fbx):,} bytes) to {target_fbx}")
-                                        detected_fbx_path[0] = target_fbx
-                                        detected_anim_raw[0] = raw_title
-                                        print("Download 100% complete! Closing browser in 3 seconds...")
-                                        time.sleep(3)
-                                        anim_downloaded[0] = True
-                                        break
-                    if anim_downloaded[0]:
-                        break
-            except Exception:
-                pass
+                time.sleep(1)
 
-            # 3. Check output_dir for any newly created animated FBX file
-            if os.path.exists(output_dir):
-                for f in os.listdir(output_dir):
-                    if f.lower().endswith(".fbx") and ("_anim_" in f or "4_model_anim" in f):
-                        cand_path = os.path.join(output_dir, f)
-                        if os.path.isfile(cand_path) and os.path.getsize(cand_path) > 50000 and os.path.getmtime(cand_path) >= start_time - 30:
-                            cand_model, anim_slug, anim_raw_name = parse_anim_info_from_fbx(cand_path, model_name)
-                            print(f"\n📥 [ANIMATED FBX DETECTED IN OUTPUT DIR] File: {f}")
-                            detected_fbx_path[0] = cand_path
-                            detected_anim_raw[0] = anim_raw_name
-                            anim_downloaded[0] = True
-                            break
+            if current_download_finished[0] and last_downloaded_fbx[0]:
+                downloaded_results.append(last_downloaded_fbx[0])
+                print(f"✅ Pose [{p_idx + 1}/{total_poses}] ('{pose_name}') completed.")
+                if p_idx + 1 < total_poses:
+                    print(f"⏳ Waiting 3 seconds before next pose...\n")
+                    time.sleep(3)
+                    # Close any leftover modal dialog before next pose
+                    try:
+                        modal_cancel = page.query_selector('.modal button:has-text("CANCEL"), .modal button.close')
+                        if modal_cancel and modal_cancel.is_visible():
+                            modal_cancel.click()
+                    except Exception:
+                        pass
+            else:
+                print(f"⚠️ Pose [{p_idx + 1}/{total_poses}] ('{pose_name}') download timed out.")
 
-            time.sleep(1)
-
+        print("🚪 Closing browser window in 2 seconds...\n")
+        time.sleep(2)
         context.close()
 
-    if detected_fbx_path[0] and os.path.exists(detected_fbx_path[0]):
-        anim_slug = to_snake_case(detected_anim_raw[0])
-        return detected_fbx_path[0], anim_slug, detected_anim_raw[0]
-    return None, None, None
+    if target_poses is None:
+        return downloaded_results[0] if downloaded_results else (None, None, None)
+    return downloaded_results
 
 
 def step5_export_anim_base_usdz(blender_bin, anim_fbx_path, output_dir, model_name):
@@ -711,12 +997,13 @@ def step7_import_to_spatial_editor(se_project_dir, scene_name, model_name, anim_
     scene_file = os.path.join(scenes_dir, f"{scene_name_pascal}.usda")
 
     usd_prim_name = re.sub(r"[\s\-\W]+", "_", anim_raw_name).strip("_")
+    skel_anim_path = get_skel_anim_path(blender_bin, anim_usdc_path, fallback_name=usd_prim_name)
     anim_struct_code = f"""                def SpatialStruct "{anim_slug}"
                 {{
                     custom string[] clipNames = []
                     custom uniform asset file = @../Assets/anims/{anim_slug}.usdc@
                     custom bool isDefault = 0
-                    custom string path = "/root/Armature/Armature/{usd_prim_name}_SkeletonAnimation_SkeletonAnimation"
+                    custom string path = "{skel_anim_path}"
                 }}"""
 
     if not os.path.exists(scene_file):
@@ -868,6 +1155,63 @@ def check_existing_anim_fbx(output_dir, model_name, custom_anim_fbx=None):
     return candidates
 
 
+def process_downloaded_animations(downloaded, blender_bin, out_dir, model_name, se_project_dir, scene_name):
+    """
+    Process downloaded Mixamo FBX file(s):
+    - Export base mesh USDZ only once (Step 5) -> {model_name}_anim_base.usdz
+    - Export animation USDC for each downloaded motion (Step 6) -> {model_name}_anim_{slug}.usdc
+    - Deploy base mesh and all motion tracks to Spatial Editor (Step 7)
+    """
+    if not downloaded:
+        sys.exit("Error: Failed to capture Mixamo animation download.")
+
+    print(f"\n" + "=" * 70)
+    print(f"Processing {len(downloaded)} animation(s) for model '{model_name}'...")
+    print("=" * 70)
+
+    # Step 5: Export base USDZ only once
+    base_usdz_path = None
+    existing_base_usdz = os.path.join(out_dir, f"{model_name}_anim_base.usdz")
+    if os.path.exists(existing_base_usdz):
+        print(f"\nReusing existing base mesh USDZ: {existing_base_usdz}")
+        base_usdz_path = existing_base_usdz
+    else:
+        first_fbx = downloaded[0][0]
+        base_usdz_path = step5_export_anim_base_usdz(blender_bin, first_fbx, out_dir, model_name)
+
+    # Step 6: Export USDC animation tracks for each downloaded pose
+    usdc_paths = []
+    for idx, (anim_fbx_path, anim_slug, anim_raw_name) in enumerate(downloaded):
+        print(f"\n[{idx + 1}/{len(downloaded)}] Processing animation: '{anim_raw_name}' ({anim_slug})")
+        anim_usdc_path = step6_export_anim_usdc(
+            blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name
+        )
+        usdc_paths.append(anim_usdc_path)
+
+        if se_project_dir:
+            step7_import_to_spatial_editor(
+                se_project_dir=se_project_dir,
+                scene_name=scene_name,
+                model_name=model_name,
+                anim_slug=anim_slug,
+                anim_raw_name=anim_raw_name,
+                base_usdz_path=base_usdz_path if idx == 0 else None,
+                anim_usdc_path=anim_usdc_path,
+                blender_bin=blender_bin,
+            )
+
+    print(f"\n" + "=" * 70)
+    print(f"🎉 Pipeline execution finished successfully!")
+    print(f"Summary:")
+    print(f"  • Base Mesh USDZ (1): {base_usdz_path}")
+    print(f"  • Motion Tracks USDC ({len(usdc_paths)}):")
+    for up in usdc_paths:
+        print(f"     - {up}")
+    if se_project_dir:
+        print(f"  • Deployed to Spatial Editor project: {se_project_dir}")
+    print("=" * 70 + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Pose Binder (pose-binder): USDZ to Mixamo & Spatial Editor Pipeline"
@@ -890,6 +1234,20 @@ def main():
         const=True,
         default=False,
         help="Reuse existing Mixamo.com character session to select a new animation action (skips Steps 1-3, runs Steps 4-6)",
+    )
+    parser.add_argument(
+        "--poses",
+        "--pose",
+        nargs="+",
+        type=str,
+        default=None,
+        help="One or more Mixamo pose/animation names or IDs to bind (e.g. --poses walking punching 'jab cross')",
+    )
+    parser.add_argument(
+        "--catalog",
+        type=str,
+        default=None,
+        help="Custom path to Mixamo catalog.json (default: ~/aisandbox/mixamo/catalog.json)",
     )
     parser.add_argument(
         "--output",
@@ -936,6 +1294,33 @@ def main():
     out_dir = os.path.abspath(args.output)
     os.makedirs(out_dir, exist_ok=True)
 
+    # Resolve requested poses from catalog if specified
+    resolved_poses = None
+    if args.poses:
+        raw_queries = []
+        for p in args.poses:
+            for part in p.split(","):
+                part_clean = part.strip()
+                if part_clean:
+                    raw_queries.append(part_clean)
+
+        resolved_poses, catalog_items, catalog_src = resolve_poses(raw_queries, args.catalog)
+        if catalog_items:
+            print(f"Loaded {len(catalog_items)} motions from Mixamo catalog at: {catalog_src}")
+        else:
+            print("Notice: Mixamo catalog not found. Will use input pose names directly.")
+
+        print(f"\nResolved {len(resolved_poses)} target pose(s) to bind:")
+        for idx, rp in enumerate(resolved_poses):
+            match_str = f" [Catalog ID: {rp['id']}]" if rp.get("id") else ""
+            print(f"  {idx + 1}. '{rp['name']}' (slug: {rp['slug']}){match_str}")
+        print()
+
+        # If --poses is specified without --input or --input-anim, assume --input-mixamo to reuse existing character
+        if not args.input and not args.input_anim and not args.input_mixamo:
+            print("Notice: --poses specified without --input. Enabling --input-mixamo to reuse existing Mixamo session.")
+            args.input_mixamo = True
+
     # Workflow 1: --input-anim (Process provided Mixamo animation FBX directly: Steps 5-6)
     if args.input_anim:
         anim_fbx_path = os.path.abspath(args.input_anim)
@@ -949,21 +1334,8 @@ def main():
         print(f"\nProcessing provided Mixamo animation FBX: {anim_fbx_path}")
         print(f"Detected animation slug: '{anim_slug}', title: '{anim_raw_name}'")
 
-        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
-        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
-
-        if args.import_to_se:
-            step7_import_to_spatial_editor(
-                se_project_dir=args.import_to_se,
-                scene_name=args.scene,
-                model_name=model_name,
-                anim_slug=anim_slug,
-                anim_raw_name=anim_raw_name,
-                base_usdz_path=base_usdz_path,
-                anim_usdc_path=anim_usdc_path,
-                blender_bin=blender_bin,
-            )
-        print("\nPipeline execution finished successfully!")
+        downloaded = [(anim_fbx_path, anim_slug, anim_raw_name)]
+        process_downloaded_animations(downloaded, blender_bin, out_dir, model_name, args.import_to_se, args.scene)
         return
 
     # Workflow 2: --input-mixamo (Reuse uploaded Mixamo character session: Steps 4-6)
@@ -980,27 +1352,16 @@ def main():
                 model_name = "character"
 
         print(f"Pipeline target model name: '{model_name}'")
-        anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(
-            zip_path=None, output_dir=out_dir, model_name=model_name, skip_upload=True
+        res = step4_launch_interactive_mixamo_browser(
+            zip_path=None,
+            output_dir=out_dir,
+            model_name=model_name,
+            skip_upload=True,
+            target_poses=resolved_poses,
+            catalog_path=args.catalog,
         )
-        if not anim_fbx_path:
-            sys.exit("Error: Failed to capture Mixamo animation download.")
-
-        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
-        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
-
-        if args.import_to_se:
-            step7_import_to_spatial_editor(
-                se_project_dir=args.import_to_se,
-                scene_name=args.scene,
-                model_name=model_name,
-                anim_slug=anim_slug,
-                anim_raw_name=anim_raw_name,
-                base_usdz_path=base_usdz_path,
-                anim_usdc_path=anim_usdc_path,
-                blender_bin=blender_bin,
-            )
-        print("\nPipeline execution finished successfully!")
+        downloaded = res if isinstance(res, list) else ([res] if res and res[0] else [])
+        process_downloaded_animations(downloaded, blender_bin, out_dir, model_name, args.import_to_se, args.scene)
         return
 
     # Workflow 3: --input (Full USDZ -> Mixamo -> USD -> SE pipeline: Steps 1-6)
@@ -1015,35 +1376,27 @@ def main():
         step2_folder, fbx_out = step2_convert_usdz_to_fbx(blender_bin, usdz_path, out_dir, model_name)
         zip_path = step3_package_for_mixamo(step2_folder, fbx_out, out_dir, model_name)
 
-        anim_fbx_path = None
+        downloaded = []
         if args.auto_browser and os.path.exists(zip_path):
-            anim_fbx_path, anim_slug, anim_raw_name = step4_launch_interactive_mixamo_browser(zip_path, out_dir, model_name)
-
-        if not anim_fbx_path:
-            sys.exit("Error: Failed to capture Mixamo animation download.")
-
-        base_usdz_path = step5_export_anim_base_usdz(blender_bin, anim_fbx_path, out_dir, model_name)
-        anim_usdc_path = step6_export_anim_usdc(blender_bin, anim_fbx_path, out_dir, model_name, anim_slug, anim_raw_name)
-
-        if args.import_to_se:
-            step7_import_to_spatial_editor(
-                se_project_dir=args.import_to_se,
-                scene_name=args.scene,
+            res = step4_launch_interactive_mixamo_browser(
+                zip_path=zip_path,
+                output_dir=out_dir,
                 model_name=model_name,
-                anim_slug=anim_slug,
-                anim_raw_name=anim_raw_name,
-                base_usdz_path=base_usdz_path,
-                anim_usdc_path=anim_usdc_path,
-                blender_bin=blender_bin,
+                skip_upload=False,
+                target_poses=resolved_poses,
+                catalog_path=args.catalog,
             )
-        print("\nPipeline execution finished successfully!")
+            downloaded = res if isinstance(res, list) else ([res] if res and res[0] else [])
+
+        process_downloaded_animations(downloaded, blender_bin, out_dir, model_name, args.import_to_se, args.scene)
         return
 
     sys.exit(
         "Error: Please specify one of the input flags:\n"
         "  --input <usdz_file>     : Convert USDZ, upload to Mixamo, and export USD/SE assets\n"
         "  --input-anim <fbx_file> : Process existing Mixamo FBX and export USD/SE assets\n"
-        "  --input-mixamo          : Select new action for already-uploaded Mixamo character"
+        "  --input-mixamo          : Select new action for already-uploaded Mixamo character\n"
+        "  --poses <p1> [p2...]    : Specify Mixamo poses to bind (auto-matches catalog at ~/aisandbox/mixamo/)"
     )
 
 
