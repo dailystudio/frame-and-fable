@@ -7,6 +7,35 @@ from pathlib import Path
 from typing import Optional
 
 
+def load_dotenv():
+    """Load API keys from gitignored .env files if not already in os.environ."""
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+        Path(__file__).resolve().parent.parent.parent.parent / ".env",
+        Path.home() / ".env",
+    ]
+    for env_path in candidates:
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("'\"")
+                            if k and k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
+
+
+load_dotenv()
+
+
 def get_api_key(provider: str = "hyper3d", explicit_key: Optional[str] = None) -> Optional[str]:
     """
     Resolve API key for a given provider.
@@ -17,6 +46,8 @@ def get_api_key(provider: str = "hyper3d", explicit_key: Optional[str] = None) -
     """
     if explicit_key and explicit_key.strip():
         return explicit_key.strip()
+
+    load_dotenv()
 
     provider_normalized = provider.lower().replace("-", "_")
 

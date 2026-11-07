@@ -549,6 +549,9 @@ class Hyper3DProvider(Base3DModelProvider):
                     uuid=j.get("uuid", ""),
                     status=j.get("status", "Waiting"),
                     queue_length=j.get("queue_length"),
+                    error=j.get("error"),
+                    message=j.get("message"),
+                    reason=j.get("reason"),
                 )
             )
 

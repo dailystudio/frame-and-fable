@@ -132,6 +132,19 @@ Wraps `model-multiviews.sh` tailored for garments/clothing, generating Left, Top
 ./presets/garment-multiviews.sh jacket_front.png "denim fabric, realistic folds"
 ```
 
+### 6. Standalone Chroma-Key / Solid Background Removal (`remove-background`)
+Removes green-screen or any solid color background from existing AI-generated images using the same HSV range mechanism as `gemini-image --transparent-background`. Supports popular color strings (`"green"`, `"white"`, `"#FFF"`, `"#00FF00"`, `"0x00FF00"`, `"rgb(r,g,b)"`, `"hsl(h,s%,l%)"`) and accepts a range of shades around the target color:
+```bash
+# Default: remove green chroma-key background in-place (--bg-color defaults to "green")
+./remove-background character.png
+
+# Remove white background using short hex color
+./remove-background sprite.png --bg-color "#FFF"
+
+# Save to a separate output file with custom color string
+./remove-background input.png --bg-color "rgb(0, 255, 0)" -o output_transparent.png
+```
+
 ---
 
 ## Command Line Options

@@ -36,6 +36,9 @@ image-craft [OPTIONS] [PROMPT]
 model-multiviews <REF_IMAGE> [EXTRA_PROMPT] [OPTIONS]
 t-pose-multiviews <REF_IMAGE> [EXTRA_PROMPT] [OPTIONS]
 garment-multiviews <REF_IMAGE> [EXTRA_PROMPT] [OPTIONS]
+
+# Standalone Chroma-Key / Background Removal Tool:
+remove-background <INPUT_IMAGE> [--bg-color COLOR] [-o OUTPUT]
 ```
 
 ### Environment Setup
@@ -67,9 +70,9 @@ gemini-image "Macro photography of an intricate brass mechanical watch movement 
 
 ---
 
-### B. Transparent PNG Character Sprites & Props (`--transparent`)
+### B. Transparent PNG Character Sprites & Background Removal (`--transparent` & `remove-background`)
 
-Automatically appends `use 0x00FF00 chroma key background` and executes OpenCV/Pillow post-processing to isolate the subject on a transparent background:
+Automatically appends `use 0x00FF00 chroma key background` and executes OpenCV/Pillow post-processing to isolate the subject on a transparent background, or use `remove-background` directly on existing images:
 ```bash
 # Generate transparent 2D character sprite:
 gemini-image "Full-body 2D concept character sprite of a female cyberpunk detective holding a glowing datapad" \
@@ -82,6 +85,12 @@ gemini-image "An ancient glowing crystalline dagger with golden runic engravings
   --transparent \
   -s 1K \
   -o crystal_dagger.png
+
+# Remove green chroma-key background from an existing AI-generated image (defaults to --bg-color "green"):
+remove-background character_greenscreen.png
+
+# Remove white or custom background color (#FFF, #FFFFFF, rgb(...), hsl(...), named colors):
+remove-background prop.png --bg-color "#FFF" -o prop_transparent.png
 ```
 
 ---

@@ -504,6 +504,8 @@ def main():
         sys.exit(1)
     except TaskFailedError as e:
         print(f"\nGeneration Failed: {e}", file=sys.stderr)
+        if e.details:
+            print(f"Details: {json.dumps(e.details, indent=2, ensure_ascii=False)}", file=sys.stderr)
         sys.exit(1)
     except TaskTimeoutError as e:
         print(f"\nOperation Timed Out: {e}", file=sys.stderr)

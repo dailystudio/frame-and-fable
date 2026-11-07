@@ -38,6 +38,9 @@ class JobStatus:
     uuid: str
     status: str  # "Waiting", "Generating", "Done", "Failed"
     queue_length: Optional[int] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+    reason: Optional[str] = None
 
     @property
     def is_done(self) -> bool:
@@ -82,8 +85,16 @@ class TaskStatus:
     @property
     def summary(self) -> str:
         if self.is_failed:
-            err = self.error or self.message or "Unknown failure"
-            return f"Failed: {err}"
+            err = self.error or self.message
+            if not err:
+                for j in self.jobs:
+                    if j.is_failed:
+                        err = j.error or j.message or j.reason
+                        if err:
+                            break
+            if not err and self.raw_response:
+                err = self.raw_response.get("error") or self.raw_response.get("message")
+            return f"Failed: {err or 'Unknown failure'}"
         if self.is_done:
             return "Done"
 

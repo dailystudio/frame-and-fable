@@ -628,6 +628,55 @@ install_craft_presets() {
           fi
         done
       fi
+
+      local rb_script="${craft_path}/remove-background.py"
+      local rb_bin="${BIN_DIR}/remove-background"
+      local rb_venv_python="${VENVS_BASE_DIR}/${craft}/bin/python"
+
+      if [ -f "$rb_script" ]; then
+        mkdir -p "${BIN_DIR}"
+        rm -f "$rb_bin"
+        if [ "$INSTALL_BIN_TYPE" = "binary" ] || [ "$INSTALL_MODE" = "binary" ]; then
+          local dist_dir="${VENVS_BASE_DIR}/${craft}/dist"
+          local build_dir="${VENVS_BASE_DIR}/${craft}/build"
+          local venv_pyinstaller="${VENVS_BASE_DIR}/${craft}/bin/pyinstaller"
+          if [ -x "$venv_pyinstaller" ]; then
+            echo -e "  ${CYAN}🔨${RESET} Compiling companion native binary: ${BOLD}remove-background${RESET}..."
+            local pyi_args=(
+              "--onefile"
+              "--clean"
+              "--distpath" "${dist_dir}"
+              "--workpath" "${build_dir}/remove-background"
+              "--specpath" "${build_dir}/remove-background"
+              "--name" "remove-background"
+            )
+            "${venv_pyinstaller}" "${pyi_args[@]}" "${rb_script}" > "${build_dir}/pyi_rb.log" 2>&1 || true
+            if [ -f "${dist_dir}/remove-background" ]; then
+              cp -f "${dist_dir}/remove-background" "${rb_bin}"
+              chmod 555 "${rb_bin}"
+              rm -rf "${build_dir}/remove-background" "${dist_dir}/remove-background"
+              echo -e "  ${GREEN}✓${RESET} Installed native companion binary: ${rb_bin} (read-only)"
+            fi
+          fi
+        fi
+
+        if [ ! -f "${rb_bin}" ]; then
+          cat <<EOF > "$rb_bin"
+#!/usr/bin/env bash
+# Auto-generated CLI wrapper for Frame & Fable companion tool: remove-background
+VENV_PYTHON="${rb_venv_python}"
+SCRIPT="${rb_script}"
+
+if [ -x "\${VENV_PYTHON}" ]; then
+  exec "\${VENV_PYTHON}" "\${SCRIPT}" "\$@"
+else
+  exec python3 "\${SCRIPT}" "\$@"
+fi
+EOF
+          chmod 555 "$rb_bin"
+          echo -e "  ${GREEN}✓${RESET} Installed companion CLI wrapper: ${rb_bin} (read-only)"
+        fi
+      fi
       ;;
     "pose-binder")
       local src_script="${craft_path}/fix_chin_jaw_weights.py"
@@ -688,7 +737,7 @@ uninstall_craft_presets() {
   local craft="$1"
   case "$craft" in
     "image-craft")
-      local preset_bins=("model-multiviews" "t-pose-multiviews" "garment-multiviews")
+      local preset_bins=("model-multiviews" "t-pose-multiviews" "garment-multiviews" "remove-background")
       for pb in "${preset_bins[@]}"; do
         local target_bin="${BIN_DIR}/${pb}"
         if [ -f "$target_bin" ] || [ -L "$target_bin" ]; then
